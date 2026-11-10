@@ -1,8 +1,10 @@
 """Telemetry schema: one row per GPU per scrape.
 
-Column names follow DCGM exporter fields where one exists, so real exports can be
-mapped onto this schema later (week 2). Counters ending in ``_total`` are cumulative
-over the life of a GPU and reset when a GPU is replaced (new ``gpu_uuid``).
+Column names follow DCGM exporter fields where one exists, so real exports map onto this
+schema (see ``gpufleet.ingest``). Counters ending in ``_total`` are cumulative since the
+driver last loaded: they restart at zero when a GPU is replaced (new ``gpu_uuid``) and
+after a node reboot or driver upgrade. Use ``gpufleet.clean.counter_increments`` to turn
+them into per-interval counts.
 """
 
 from __future__ import annotations
@@ -34,11 +36,12 @@ TELEMETRY_COLUMNS: list[Column] = [
     Column("job_id", "str", "", "Job running on the node, empty when idle", nullable=True),
     Column("gpu_util", "float", "%", "SM utilisation", "DCGM_FI_DEV_GPU_UTIL", 0, 100),
     Column("mem_util", "float", "%", "Memory bandwidth utilisation", "DCGM_FI_DEV_MEM_COPY_UTIL",
-           0, 100),
+           0, 100, nullable=True),
     Column("sm_clock_mhz", "float", "MHz", "SM clock", "DCGM_FI_DEV_SM_CLOCK", 0, 3000),
     Column("power_w", "float", "W", "Board power draw", "DCGM_FI_DEV_POWER_USAGE", 0, 1000),
     Column("temp_gpu_c", "float", "C", "GPU die temperature", "DCGM_FI_DEV_GPU_TEMP", 0, 120),
-    Column("temp_mem_c", "float", "C", "HBM temperature", "DCGM_FI_DEV_MEMORY_TEMP", 0, 130),
+    Column("temp_mem_c", "float", "C", "HBM temperature (not reported by every GPU model)",
+           "DCGM_FI_DEV_MEMORY_TEMP", 0, 130, nullable=True),
     Column("throttle_thermal", "bool", "", "Clocks limited by temperature",
            "DCGM_FI_DEV_CLOCK_THROTTLE_REASONS"),
     Column("throttle_power", "bool", "", "Clocks limited by power cap",
@@ -68,6 +71,9 @@ FAILURE_COLUMNS = [
     "onset_time", "failure_time", "repaired_time", "observed",
 ]
 STRAGGLER_COLUMNS = ["gpu_uuid", "node_id", "gpu_index", "kind", "slowdown", "start", "end"]
+MAINTENANCE_COLUMNS = [
+    "node_id", "rack_id", "kind", "start", "end", "node_offline", "resets_counters",
+]
 
 
 class SchemaError(ValueError):
@@ -90,8 +96,16 @@ def _kind_ok(series: pd.Series, kind: str) -> bool:
     raise ValueError(kind)
 
 
-def validate_telemetry(df: pd.DataFrame, check_counters: bool = True) -> None:
-    """Raise SchemaError listing every problem found, or return None if the frame is valid."""
+def validate_telemetry(
+    df: pd.DataFrame,
+    check_counters: bool = True,
+    reset_gap: pd.Timedelta | str = "10min",
+) -> None:
+    """Raise SchemaError listing every problem found, or return None if the frame is valid.
+
+    A counter may only go down after a gap in that GPU's data longer than ``reset_gap``,
+    which is what a reboot or driver reload looks like. A drop with no gap is an error.
+    """
     problems: list[str] = []
 
     missing = [c for c in COLUMN_NAMES if c not in df.columns]
@@ -117,10 +131,16 @@ def validate_telemetry(df: pd.DataFrame, check_counters: bool = True) -> None:
 
     if check_counters and not problems:
         ordered = df.sort_values(["gpu_uuid", "timestamp"])
+        by_gpu = ordered.groupby("gpu_uuid", observed=True)
+        gap = by_gpu["timestamp"].diff().to_numpy()
+        after_gap = gap > np.timedelta64(pd.Timedelta(reset_gap))
         for name in COUNTER_COLUMNS:
-            diffs = ordered.groupby("gpu_uuid", observed=True)[name].diff().to_numpy()
-            if (np.nan_to_num(diffs) < 0).any():
-                problems.append(f"{name}: counter decreases within a GPU's life")
+            diffs = by_gpu[name].diff().to_numpy()
+            bad = (np.nan_to_num(diffs) < 0) & ~after_gap
+            if bad.any():
+                problems.append(
+                    f"{name}: counter decreases {int(bad.sum())} times without a reset gap"
+                )
 
     if problems:
         raise SchemaError("; ".join(problems))
