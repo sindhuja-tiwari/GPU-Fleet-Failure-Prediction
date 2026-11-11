@@ -13,7 +13,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .clean import align_timestamps, counter_increments, find_gaps
+from .clean import align_timestamps, find_gaps
+from .features import scrape_signals  # noqa: F401  (re-exported for the notebook)
 
 # Reference categorical palette (fixed order) plus neutrals.
 BLUE, ORANGE, AQUA, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
@@ -55,20 +56,6 @@ class Dataset:
     def from_result(cls, result) -> Dataset:
         return cls(result.telemetry, result.failures, result.stragglers, result.maintenance,
                    f"{result.config.step_minutes}min")
-
-
-def scrape_signals(tel: pd.DataFrame, step: str = "5min") -> pd.DataFrame:
-    """Per-scrape signals: counter increments and comparisons with the GPU's node peers."""
-    df = counter_increments(align_timestamps(tel, step))
-    peers = df.groupby(["timestamp", "node_id"], observed=True)
-    busy = df["gpu_util"] > 50
-    df["temp_vs_node"] = df["temp_gpu_c"] - peers["temp_gpu_c"].transform("median")
-    df.loc[~busy, "temp_vs_node"] = np.nan  # idle GPUs on a busy node are naturally cooler
-    df["clock_vs_node"] = df["sm_clock_mhz"] / peers["sm_clock_mhz"].transform("median")
-    df.loc[~busy, "clock_vs_node"] = np.nan
-    df["step_vs_node"] = df["step_compute_ms"] / peers["step_compute_ms"].transform("median")
-    df["power_vs_node"] = df["power_w"] - peers["power_w"].transform("median")
-    return df
 
 
 def hourly_signals(sig: pd.DataFrame) -> pd.DataFrame:
