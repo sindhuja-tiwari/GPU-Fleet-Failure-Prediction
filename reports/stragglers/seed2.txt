@@ -1,0 +1,15 @@
+204,730 straggling scrapes, 2351 intervals in 53.8s; wrote reports/stragglers/intervals_seed2.csv
+{
+  "precision": 0.946,
+  "recall": 0.997,
+  "f1": 0.971,
+  "cause_accuracy": 0.952,
+  "intervals_with_busy_time": 312,
+  "intervals_detected": 311,
+  "median_delay_minutes": 10.0,
+  "recall_by_kind": {
+    "thermal": 0.996,
+    "chronic": 1.0,
+    "transient": 0.955
+  }
+}

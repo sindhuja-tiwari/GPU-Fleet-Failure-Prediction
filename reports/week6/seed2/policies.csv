@@ -1,0 +1,7 @@
+policy,eval_horizon,threshold,pr_auc,failures,caught,recall,predictable_failures,predictable_caught,predictable_recall,alerts,false_alerts,gpu_days,false_alerts_per_1k_gpu_days,median_lead_hours,precision,cost_per_1k_gpu_days
+"lightgbm 24h, rolling-validation threshold",24,0.3966,0.5094,31,22,0.7097,24,22,0.9167,37,15,7121.2083,2.1064,13.375,0.5946,37.6
+"lightgbm 72h, rolling-validation threshold",72,0.7358,0.5035,31,21,0.6774,24,21,0.875,72,23,7121.2083,3.2298,50.0833,0.6806,38.95
+"lightgbm 24h, cost-optimal threshold",24,0.5601,0.5094,31,22,0.7097,24,22,0.9167,36,14,7121.2083,1.966,12.625,0.6111,38.52
+two-tier (72h warning + 24h urgent),72,1.0,0.517,31,22,0.7097,24,22,0.9167,43,4,7121.2083,0.5617,21.9167,0.907,34.2
+sequence MLP 24h (week 4 protocol),24,1.0,0.3739,31,24,0.7742,24,24,1.0,39,15,7121.2083,2.1064,7.7917,0.6154,38.85
+lightgbm 24h (week 4 protocol),24,0.4498,0.5448,31,22,0.7097,24,22,0.9167,36,14,7121.2083,1.966,11.125,0.6111,39.52

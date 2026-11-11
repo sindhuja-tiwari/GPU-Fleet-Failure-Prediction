@@ -1,0 +1,34 @@
+# Alert rules on the metrics served at /metrics. Route them with Alertmanager as usual.
+groups:
+  - name: gpufleet
+    rules:
+      - alert: GPUFailureUrgent
+        expr: gpufleet_alert_level == 2
+        labels: {severity: page}
+        annotations:
+          summary: "GPU {{ $labels.node }}/gpu{{ $labels.gpu }} likely to fail within 24h"
+          description: >
+            Drain the node at the next checkpoint and swap the GPU.
+            Reasons: GET /v1/gpu/{{ $labels.gpu_uuid }} on the gpufleet API.
+
+      - alert: GPUFailureWarning
+        expr: gpufleet_alert_level == 1
+        labels: {severity: ticket}
+        annotations:
+          summary: "GPU {{ $labels.node }}/gpu{{ $labels.gpu }} at elevated risk (72h)"
+          description: Schedule a health check (dcgmi diag -r 3) at the next maintenance window.
+
+      - alert: GPUStraggler
+        expr: gpufleet_straggler_slowdown > 1.10
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.node }}/gpu{{ $labels.gpu }} steps take {{ printf \"%.2f\" $value }}x as long as its peers"
+          description: "Likely cause: {{ $labels.cause }}."
+
+      - alert: GPUFleetTelemetryStale
+        expr: rate(gpufleet_ingested_rows_total[10m]) == 0
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: gpufleet has received no telemetry for 15 minutes
