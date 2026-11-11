@@ -239,6 +239,13 @@ def _replay(args: argparse.Namespace) -> None:
     print(f"replay finished: {n} alerts")
 
 
+def _delta(args: argparse.Namespace) -> None:
+    from .delta import run
+
+    report = run(args.data, args.out, reps=args.reps, seed=args.seed)
+    print(f"wrote {report}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="gpufleet", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -335,6 +342,13 @@ def main(argv: list[str] | None = None) -> None:
     rp.add_argument("--step", help="scrape interval (default: from config.json, else 5min)")
     rp.add_argument("--wait", type=int, default=60, help="seconds to wait for the API")
     rp.set_defaults(func=_replay)
+
+    d = sub.add_parser("delta", help="real-data check on the public NCSA Delta Xid logs")
+    d.add_argument("--data", default="data/delta", help="where to keep the Zenodo files")
+    d.add_argument("--out", default="reports/delta", help="output directory")
+    d.add_argument("--reps", type=int, default=300, help="circular shifts for p-values")
+    d.add_argument("--seed", type=int, default=0)
+    d.set_defaults(func=_delta)
 
     args = parser.parse_args(argv)
     args.func(args)

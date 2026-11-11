@@ -124,6 +124,20 @@ gpufleet ingest --prometheus-json dump.json --out data/real
 gpufleet summarize data/real --step 5min
 ```
 
+## Real-data check (NCSA Delta)
+
+Do earlier Xid errors predict critical ones on a real fleet? `gpufleet delta` downloads the
+public NCSA Delta A100 / H100 Xid logs (Cui et al., SC'25, Zenodo 15851780) and tests it.
+On this release, earlier Xids do **not** predict hard failures such as a GPU falling off the
+bus (out-of-sample ROC-AUC 0.55, not significant). They do predict GSP firmware errors
+(0.74), but mostly because both track slow changes in the fleet rather than as a short-term
+warning. The release has no node, GPU or time of day, so the per-GPU, hours-ahead question
+stays open. Details: [docs/delta-real-data.md](docs/delta-real-data.md).
+
+```bash
+gpufleet delta --out reports/delta
+```
+
 ## Simulated data
 
 There is no public dataset of per-GPU health telemetry with labelled failures, so the
@@ -169,6 +183,7 @@ src/gpufleet/
   stream.py      streaming scorer
   api.py         FastAPI service; static/dashboard.html is the dashboard
   client.py      replay client (standard library only)
+  delta.py       real-data check on the public NCSA Delta Xid logs
   cli.py         command line
 models/demo-bundle/  pretrained bundle used by the demo
 deploy/prometheus/   Prometheus config and alert rules
