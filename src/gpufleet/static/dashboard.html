@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gpufleet · fleet health</title>
+<style>
+/* Editorial broadsheet: bone-white paper, black ink, one highlighter green.
+   Token names follow the style guide. The licensed faces (TWK Lausanne, PP Mondwest, Editorial New)
+   are used when installed; otherwise the bundled open fonts stand in: Inter for Lausanne, Newsreader
+   for Mondwest and Editorial New (static/fonts, SIL OFL 1.1). */
+@font-face { font-family: "Inter Sub"; src: url("static/fonts/inter.woff2") format("woff2");
+  font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Newsreader Sub"; src: url("static/fonts/newsreader.woff2") format("woff2");
+  font-weight: 200 800; font-display: swap; }
+@font-face { font-family: "Newsreader Sub"; src: url("static/fonts/newsreader-italic.woff2") format("woff2");
+  font-weight: 200 800; font-style: italic; font-display: swap; }
+
+:root {
+  /* Colors */
+  --color-bone-white: #fafffa;
+  --color-press-black: #121613;
+  --color-typesetter-ink: #000000;
+  --color-slate-verdant: #232924;
+  --color-newsprint-gray: #516254;
+  --color-muted-sage: #c8d2c8;
+  --color-highlighter-green: #2bee4b;
+  --color-shadow-moss: #93b799;
+  --color-echo-green: #c4e4c9;
+
+  /* Font families */
+  --font-twk-lausanne: "TWK Lausanne", "Inter Sub", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-pp-mondwest: "PP Mondwest", "Newsreader Sub", Georgia, serif;
+  --font-editorial-new: "Editorial New", "Newsreader Sub", Georgia, serif;
+  --font-times: Times, "Times New Roman", "Liberation Serif", serif;
+
+  /* Type scale */
+  --text-caption: 11px;   --leading-caption: 1.1;   --tracking-caption: 0.11px;
+  --text-body-sm: 14px;   --leading-body-sm: 1.1;   --tracking-body-sm: 0.14px;
+  --text-body: 18px;      --leading-body: 1;        --tracking-body: -0.36px;
+  --text-subheading: 60px; --leading-subheading: 0.9; --tracking-subheading: -1.2px;
+  --text-heading: 96px;   --leading-heading: 1;     --tracking-heading: -1.92px;
+  --text-heading-lg: 155px; --leading-heading-lg: 1; --tracking-heading-lg: -6.2px;
+  --text-display: 295px;  --leading-display: 0.9;   --tracking-display: -11.8px;
+  --font-weight-extralight: 200; --font-weight-w350: 350; --font-weight-regular: 400; --font-weight-w550: 550;
+
+  /* Spacing and layout */
+  --spacing-4: 4px; --spacing-8: 8px; --spacing-10: 10px; --spacing-15: 15px; --spacing-20: 20px;
+  --spacing-25: 25px; --spacing-30: 30px; --spacing-35: 35px; --spacing-40: 40px; --spacing-50: 50px;
+  --spacing-60: 60px; --spacing-120: 120px; --spacing-190: 190px;
+  --page-max-width: 1400px; --section-gap: 80px; --element-gap: 20px;
+  --gutter: clamp(20px, 4vw, 50px);
+
+  /* Radii and shadows */
+  --radius-pills: 10px; --radius-round: 9999px; --radius-images: 14px; --radius-buttons: 5px;
+  --shadow-lg: rgba(16, 94, 29, 0.45) 1px 8px 20px 0px;
+  --shadow-lg-2: rgba(18, 146, 39, 0.25) 1px 8px 20px 0px;
+
+  /* Surfaces */
+  --surface-canvas: var(--color-bone-white);
+  --surface-dark-section: var(--color-press-black);
+  --surface-accent-band: var(--color-highlighter-green);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--surface-canvas); color: var(--color-typesetter-ink); }
+html { scroll-behavior: smooth; scroll-padding-top: 70px; }
+/* base-3: 16px / 200 / 1.4 / 0.01em */
+body { font: var(--font-weight-extralight) 16px/1.4 var(--font-twk-lausanne); letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased; }
+.wrap { max-width: var(--page-max-width); margin: 0 auto; padding: 0 var(--gutter); }
+/* xs: the 11px / 550 uppercase micro-label */
+.micro { font: var(--font-weight-w550) var(--text-caption)/var(--leading-caption) var(--font-twk-lausanne);
+  letter-spacing: var(--tracking-caption); text-transform: uppercase; }
+.muted { color: var(--color-newsprint-gray); }
+a { color: inherit; }
+/* base: Times 16px, the old-school link and prose face */
+.link, .times { font: 400 16px/1.2 var(--font-times); letter-spacing: 0; }
+.link { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.link:hover { text-decoration-color: var(--color-highlighter-green); text-decoration-thickness: 2px; }
+
+/* Masthead: sticky bar, nav with a green underline on the active section */
+.mast-bar { position: sticky; top: 0; z-index: 10; background: var(--surface-canvas);
+  border-bottom: 1px solid var(--color-typesetter-ink); }
+.mast { display: flex; justify-content: space-between; align-items: center; gap: var(--element-gap);
+  padding-top: var(--spacing-20); padding-bottom: var(--spacing-20); flex-wrap: wrap; }
+.wordmark { font: var(--font-weight-w550) 18px/1 var(--font-twk-lausanne); letter-spacing: -0.02em;
+  text-decoration: none; color: var(--color-press-black); }
+.wordmark u { text-decoration: none; box-shadow: inset 0 -3px 0 var(--color-highlighter-green); }
+nav { display: flex; gap: var(--spacing-25); }
+nav a { text-decoration: none; padding: var(--spacing-4) 0; border-bottom: 2px solid transparent; }
+nav a:hover { border-bottom-color: var(--color-muted-sage); }
+nav a.active { border-bottom-color: var(--color-highlighter-green); }
+.mast-meta { display: flex; gap: var(--spacing-25); align-items: center; flex-wrap: wrap; }
+.live { display: inline-flex; align-items: center; gap: var(--spacing-8); }
+.live i { width: 8px; height: 8px; border-radius: var(--radius-round); background: var(--color-highlighter-green);
+  display: inline-block; }
+.live.stale i { background: var(--color-muted-sage); }
+
+/* Hero: 5xl-9, PP Mondwest 165px / 0.9 / -0.04em */
+.hero { padding-top: var(--spacing-120); padding-bottom: var(--section-gap); }
+.kicker { margin-bottom: var(--spacing-30); }
+h1 { font: var(--font-weight-regular) clamp(64px, 11vw, 165px)/0.9 var(--font-pp-mondwest); letter-spacing: -0.04em;
+  margin: 0; max-width: 11ch; color: var(--color-press-black); }
+/* Editorial New, light italic, against Mondwest's heavier serifs */
+h1 em { font-family: var(--font-editorial-new); font-weight: 300; font-style: italic; letter-spacing: -0.02em; }
+.hl { background: linear-gradient(transparent 50%, var(--color-highlighter-green) 50%,
+  var(--color-highlighter-green) 74%, transparent 74%); padding: 0 0.04em; }
+.hero-foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--spacing-40); align-items: end;
+  margin-top: var(--spacing-50); }
+/* lg: 18px / 200 / -0.02em; body text never goes above 18px */
+.dek { font-size: var(--text-body); font-weight: var(--font-weight-extralight); line-height: 1.25;
+  letter-spacing: var(--tracking-body); max-width: 44ch; margin: 0; }
+.dek b { font-weight: var(--font-weight-w550); }
+.actions { display: flex; gap: var(--element-gap); align-items: center; flex-wrap: wrap; }
+.btn { display: inline-flex; align-items: center; gap: var(--spacing-10); background: var(--color-highlighter-green);
+  color: var(--color-typesetter-ink); padding: var(--spacing-20) var(--spacing-30); border-radius: var(--radius-buttons);
+  box-shadow: var(--shadow-lg); text-decoration: none; transition: box-shadow .15s, transform .15s; }
+.btn:hover { box-shadow: var(--shadow-lg-2); transform: translateY(1px); }
+
+/* Stat callouts: 5xl-5, Lausanne 96px / 550 / -0.02em; no cards, no shadows */
+.stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid var(--color-typesetter-ink); }
+.stat { padding: var(--spacing-20) var(--spacing-20) 0 0; }
+.stat + .stat { padding-left: var(--spacing-20); border-left: 1px solid var(--color-muted-sage); }
+.stat .v { font: var(--font-weight-w550) clamp(48px, 6.5vw, var(--text-heading))/1 var(--font-twk-lausanne);
+  letter-spacing: -0.02em; color: var(--color-newsprint-gray); margin-top: var(--spacing-15);
+  font-variant-numeric: tabular-nums; }
+.stat.hot .v { color: var(--color-press-black); }
+.stat.hot .v span { box-shadow: inset 0 -0.14em 0 var(--color-highlighter-green); }
+
+/* Sections, 80px apart */
+section.light { padding: var(--section-gap) 0; }
+.sec-head { margin-bottom: var(--spacing-30); }
+/* 5xl: PP Mondwest 60px / 0.9 / -0.04em */
+h2 { font: var(--font-weight-regular) clamp(40px, 5vw, var(--text-subheading))/var(--leading-subheading) var(--font-pp-mondwest);
+  letter-spacing: -0.04em; margin: var(--spacing-10) 0 0; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--spacing-50); }
+
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; padding: 0 0 var(--spacing-10); border-bottom: 1px solid var(--color-typesetter-ink);
+  color: var(--color-newsprint-gray); }
+/* lg-3 for figures: 18px / 400 / -0.02em */
+td { padding: var(--spacing-15) var(--spacing-10) var(--spacing-15) 0; border-bottom: 1px solid var(--color-muted-sage);
+  font-size: var(--text-body); font-weight: var(--font-weight-regular); line-height: 1; letter-spacing: -0.02em;
+  vertical-align: top; }
+td.num, th.num { text-align: right; padding-right: 0; white-space: nowrap; }
+tbody tr.click { cursor: pointer; }
+tbody tr.click:hover td { background: rgba(196, 228, 201, 0.35); }
+tr.sel td { background: rgba(196, 228, 201, 0.6); }
+tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--color-highlighter-green); padding-left: var(--spacing-10); }
+/* base-2: 16px / 550 */
+.gpu { font-size: 16px; font-weight: var(--font-weight-w550); letter-spacing: 0.01em; white-space: nowrap; }
+td.micro { white-space: nowrap; font-size: var(--text-caption); padding-top: 18px; }
+.bar { display: inline-block; height: 10px; background: var(--color-press-black); margin-right: var(--spacing-10);
+  min-width: 2px; }
+.empty { color: var(--color-newsprint-gray); font: 400 16px/1.2 var(--font-times); padding: var(--spacing-25) 0; }
+
+/* Level tags: green fill means urgent, an outline means warning; the word is always there. */
+.tag { display: inline-block; font: var(--font-weight-w550) var(--text-caption)/1 var(--font-twk-lausanne);
+  text-transform: uppercase; letter-spacing: var(--tracking-caption); padding: 5px 7px;
+  border-radius: var(--radius-buttons); white-space: nowrap; }
+.tag.urgent { background: var(--color-highlighter-green); color: var(--color-typesetter-ink); }
+.tag.warning { border: 1px solid currentColor; padding: 4px 6px; }
+
+/* Chart */
+.legend { display: flex; gap: var(--element-gap); margin-bottom: var(--spacing-10); color: var(--color-newsprint-gray); flex-wrap: wrap; }
+.legend svg { vertical-align: middle; margin-right: 6px; }
+#chart { position: relative; }
+#chart svg.plot { display: block; width: 100%; height: 260px; overflow: visible; font-family: var(--font-twk-lausanne); }
+.tip { position: absolute; pointer-events: none; background: var(--surface-canvas); border: 1px solid var(--color-typesetter-ink);
+  border-radius: var(--radius-buttons); padding: var(--spacing-8) var(--spacing-10); font-size: var(--text-body-sm);
+  font-weight: var(--font-weight-w350); line-height: 1.4; display: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tip b { font-weight: var(--font-weight-w550); }
+.reasons { list-style: none; padding: 0; margin: var(--spacing-25) 0 0; border-top: 1px solid var(--color-typesetter-ink); }
+.reasons li { padding: var(--spacing-10) 0; border-bottom: 1px solid var(--color-muted-sage); font: 400 16px/1.2 var(--font-times);
+  display: flex; justify-content: space-between; gap: var(--element-gap); }
+.reasons li.head { font: var(--font-weight-w550) var(--text-caption)/1.1 var(--font-twk-lausanne);
+  color: var(--color-newsprint-gray); border-bottom: none; padding-bottom: 0; }
+.reasons .val { font-family: var(--font-twk-lausanne); font-weight: var(--font-weight-w350); color: var(--color-newsprint-gray);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Dark editorial break, mid-page */
+section.dark { background: var(--surface-dark-section); color: var(--color-bone-white); padding: var(--section-gap) 0; }
+.dark-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--spacing-40);
+  margin-bottom: var(--spacing-50); }
+/* 5xl-7: Editorial New 140px / 300 / 0.9 */
+.dark-head h2 { font: 300 italic clamp(56px, 9vw, 140px)/0.9 var(--font-editorial-new); letter-spacing: -0.02em;
+  color: var(--color-bone-white); margin: var(--spacing-15) 0 0; }
+/* 5xl-8: Lausanne 155px / 550 / -0.04em */
+.bignum { font: var(--font-weight-w550) clamp(72px, 11vw, var(--text-heading-lg))/1 var(--font-twk-lausanne);
+  letter-spacing: -0.04em; color: var(--color-bone-white); text-align: right; font-variant-numeric: tabular-nums; }
+.bignum .micro { display: block; color: var(--color-muted-sage); margin-top: var(--spacing-10); letter-spacing: var(--tracking-caption); }
+section.dark th { color: var(--color-muted-sage); border-bottom-color: var(--color-bone-white); }
+section.dark td { border-bottom-color: var(--color-slate-verdant); }
+section.dark .muted, section.dark .empty { color: var(--color-muted-sage); }
+section.dark tbody tr.click:hover td { background: var(--color-slate-verdant); }
+section.dark .tag.warning { color: var(--color-bone-white); }
+/* sm: 14px / 200 / 1.4 */
+.why { font-size: var(--text-body-sm); font-weight: var(--font-weight-extralight); line-height: 1.4;
+  letter-spacing: var(--tracking-body-sm); color: var(--color-muted-sage); }
+.ghost { display: inline-block; border: 1px solid currentColor; border-radius: var(--radius-pills);
+  padding: var(--spacing-15) var(--spacing-20); text-decoration: none; }
+.ghost:hover { background: var(--color-echo-green); }
+
+/* Stragglers: table beside a short key to the causes */
+.cause { font: 400 16px/1.2 var(--font-times); letter-spacing: 0; }
+.key { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--color-typesetter-ink); }
+.key li { padding: var(--spacing-15) 0; border-bottom: 1px solid var(--color-muted-sage); }
+.key p { font-size: var(--text-body); font-weight: var(--font-weight-extralight); line-height: 1.25;
+  letter-spacing: var(--tracking-body); margin: var(--spacing-8) 0 0; }
+
+/* Footer in press black, then the full-bleed green band */
+footer { background: var(--surface-dark-section); color: var(--color-bone-white); padding: var(--spacing-60) 0; }
+.foot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--spacing-30); }
+.foot .micro { color: var(--color-muted-sage); }
+.foot p { font-size: var(--text-body); font-weight: var(--font-weight-extralight); line-height: 1.25;
+  letter-spacing: var(--tracking-body); margin: var(--spacing-15) 0 0; }
+.foot ul { list-style: none; padding: 0; margin: var(--spacing-15) 0 0; }
+.foot li { margin: 0 0 var(--spacing-8); }
+.band { background: var(--surface-accent-band); overflow: hidden; padding: var(--spacing-50) 0 var(--spacing-30); }
+/* 5xl-11: PP Mondwest 295px / 0.9 / -0.04em, the wordmark as one block of ink */
+.band .display { font: var(--font-weight-regular) clamp(96px, 21vw, var(--text-display))/var(--leading-display) var(--font-pp-mondwest);
+  letter-spacing: -0.04em; color: var(--color-bone-white); white-space: nowrap; }
+.band .row { display: flex; justify-content: space-between; gap: var(--element-gap); color: var(--color-press-black);
+  margin-top: var(--spacing-40); flex-wrap: wrap; }
+
+@media (max-width: 960px) {
+  nav { display: none; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat:nth-child(odd) { border-left: none; padding-left: 0; }
+  .stat { padding-bottom: var(--spacing-20); }
+  .cols, .foot, .hero-foot { grid-template-columns: 1fr; }
+  .hero { padding-top: var(--spacing-60); }
+}
+@media (max-width: 640px) {
+  .bar { max-width: 12vw; }
+  #risk td { white-space: nowrap; }
+  td { font-size: 16px; }
+  .dark-head { grid-template-columns: 1fr; }
+  .bignum { text-align: left; }
+  #alerts-table thead { display: none; }
+  #alerts tr { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 12px; padding: 14px 0;
+    border-bottom: 1px solid var(--color-slate-verdant); }
+  #alerts td { border: none; padding: 0; }
+  #alerts td.why { grid-column: 1 / -1; order: 4; }
+  #alerts tr.click:hover td { background: none; }
+}
+</style>
+</head>
+<body>
+<div class="mast-bar">
+  <header class="wrap mast">
+    <a class="wordmark" href="./"><u>gpu</u>fleet</a>
+    <nav class="micro" aria-label="Sections">
+      <a href="#ranking">Ranking</a><a href="#alerts-sec">Alerts</a><a href="#stragglers">Stragglers</a><a href="#about">Model</a>
+    </nav>
+    <div class="mast-meta">
+      <span class="micro live stale" id="live"><i></i><span id="clock">Waiting for telemetry</span></span>
+      <span class="micro muted" id="perf"></span>
+    </div>
+  </header>
+</div>
+
+<main>
+  <div class="wrap hero">
+    <div class="micro muted kicker">Fleet health · failure risk and stragglers</div>
+    <h1 id="headline">Waiting for the <em>first</em> hour.</h1>
+    <div class="hero-foot">
+      <p class="dek" id="dek">Scores arrive once the first full hour of telemetry is in. Each GPU gets a chance of
+        failing within 24 and 72 hours, and every alert says why.</p>
+      <div class="actions">
+        <a class="btn micro" href="docs">Open the API <span aria-hidden="true">→</span></a>
+        <a class="link" href="metrics">Prometheus metrics</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="stats" aria-label="Fleet summary">
+      <div class="stat"><div class="micro muted">GPUs tracked</div><div class="v" id="t-gpus">0</div></div>
+      <div class="stat" id="s-urgent"><div class="micro muted">Urgent · fail within 24h</div><div class="v"><span id="t-urgent">0</span></div></div>
+      <div class="stat" id="s-warning"><div class="micro muted">Warning · fail within 72h</div><div class="v"><span id="t-warning">0</span></div></div>
+      <div class="stat"><div class="micro muted">Stragglers now</div><div class="v" id="t-strag">0</div></div>
+      <div class="stat"><div class="micro muted">Alerts raised</div><div class="v" id="t-alerts">0</div></div>
+    </div>
+  </div>
+
+  <section class="light" id="ranking">
+    <div class="wrap cols">
+      <div>
+        <div class="sec-head"><div class="micro muted">01 — Ranking</div><h2>Highest risk</h2></div>
+        <table>
+          <thead><tr><th class="micro">GPU</th><th class="micro">Chance of failing in 24h</th>
+            <th class="micro num">72h</th><th class="micro num">Level</th></tr></thead>
+          <tbody id="risk"></tbody>
+        </table>
+      </div>
+      <div>
+        <div class="sec-head"><div class="micro muted">02 — History, last 72 hours</div><h2 id="g-title">Risk history</h2></div>
+        <div class="legend micro">
+          <span><svg width="22" height="6"><line x1="0" x2="22" y1="3" y2="3" stroke="#121613" stroke-width="2"/></svg>Within 24h</span>
+          <span><svg width="22" height="6"><line x1="0" x2="22" y1="3" y2="3" stroke="#516254" stroke-width="2" stroke-dasharray="5 3"/></svg>Within 72h</span>
+          <span><svg width="22" height="6"><line x1="0" x2="22" y1="3" y2="3" stroke="#93b799" stroke-width="1" stroke-dasharray="2 2"/></svg>Alert thresholds</span>
+        </div>
+        <div id="chart"><svg class="plot" id="svg" role="img" aria-label="Failure probability over the last 72 hours"></svg><div class="tip" id="tip"></div></div>
+        <ul class="reasons" id="reasons"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="dark" id="alerts-sec">
+    <div class="wrap">
+      <div class="dark-head">
+        <div><div class="micro muted">03 — Alerts</div><h2>Every alert says why.</h2></div>
+        <div class="bignum"><span id="big-alerts">0</span><span class="micro">alerts raised</span></div>
+      </div>
+      <table id="alerts-table">
+        <thead><tr><th class="micro">Time</th><th class="micro">GPU</th><th class="micro">Why: top three reasons</th><th class="micro num">Level</th></tr></thead>
+        <tbody id="alerts"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="light" id="stragglers">
+    <div class="wrap cols">
+      <div>
+        <div class="sec-head"><div class="micro muted">04 — Stragglers</div><h2>Slowing their job</h2></div>
+        <table>
+          <thead><tr><th class="micro">GPU</th><th class="micro">Likely cause</th><th class="micro num">Slowdown</th></tr></thead>
+          <tbody id="strag"></tbody>
+        </table>
+      </div>
+      <div>
+        <div class="sec-head"><div class="micro muted">How causes are named</div><h2><em style="font-family:var(--font-editorial-new);font-weight:300">Three</em> likely causes</h2></div>
+        <ul class="key">
+          <li><div class="micro">Overheating</div><p>Hotter than its node peers and clocks throttled for heat.</p></li>
+          <li><div class="micro">Lower clocks</div><p>Clocks below its node peers without being throttled for heat.</p></li>
+          <li><div class="micro">Not the GPU</div><p>Slow steps with normal clocks and temperature: look at input, network or the host.</p></li>
+        </ul>
+        <div style="margin-top:var(--spacing-40)"><a class="ghost micro" href="v1/stragglers">Stragglers as JSON</a></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer id="about">
+  <div class="wrap foot">
+    <div><div class="micro">Model</div><p id="model">Two LightGBM models, calibrated, with a 72h warning tier and a 24h urgent tier.</p></div>
+    <div><div class="micro">Endpoints</div>
+      <ul><li><a class="link" href="v1/risk">/v1/risk</a></li><li><a class="link" href="v1/alerts">/v1/alerts</a></li>
+        <li><a class="link" href="v1/stragglers">/v1/stragglers</a></li><li><a class="link" href="metrics">/metrics</a></li></ul></div>
+    <div><div class="micro">Ingest</div><p>POST JSON rows to /v1/telemetry, or raw DCGM exporter text to /v1/scrape.</p></div>
+  </div>
+</footer>
+<div class="band">
+  <div class="wrap">
+    <div class="display" aria-hidden="true">gpufleet</div>
+    <div class="row micro"><span>Failure risk and stragglers from GPU telemetry</span><span>Simulated data · see the model card</span></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pct = p => p >= 0.995 ? "99%+" : p < 0.005 ? "<1%" : Math.round(p * 100) + "%";
+const gpuName = r => `${esc(r.node_id)} · gpu${r.gpu_index}`;
+const shortTime = t => t ? t.replace("T", " ").slice(5, 16) : "";
+const causeText = {thermal: "Overheating, clocks throttled", clock: "Running at lower clocks", off_gpu: "Not the GPU: input, network or host"};
+const tag = l => l === "urgent" ? '<span class="tag urgent">Urgent</span>'
+  : l === "warning" ? '<span class="tag warning">Warning</span>' : "";
+const words = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+let selected = null, thresholds = {p24: 0.5, p72: 0.5}, lastBeat = 0;
+
+function headline(s) {
+  const c = s.counters, n = s.levels.urgent + s.levels.warning;
+  if (!c.current_hour) return;
+  const count = n < words.length ? words[n] : String(n);
+  $("headline").innerHTML = n === 0
+    ? `All <span class="hl">${c.gpus_tracked}</span> GPUs look <em>healthy</em>.`
+    : `<span class="hl">${count}</span> GPU${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} <em>attention</em>.`;
+  const parts = [];
+  if (s.levels.urgent) parts.push(`${s.levels.urgent} likely to fail within a day: drain at the next checkpoint`);
+  if (s.levels.warning) parts.push(`${s.levels.warning} at raised risk over three days: schedule a health check`);
+  if (s.stragglers.length) parts.push(`${s.stragglers.length} slowing their job right now`);
+  $("dek").textContent = parts.length ? parts.join(". ") + "." :
+    "No GPU is above either alert threshold, and no GPU is slowing its job.";
+}
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch("v1/summary")).json(); } catch (e) { $("live").classList.add("stale"); return; }
+  lastBeat = Date.now();
+  const c = s.counters;
+  thresholds = s.thresholds;
+  $("live").classList.toggle("stale", !c.current_hour);
+  $("clock").textContent = c.current_hour ? `Fleet time ${c.current_hour.slice(0, 16).replace("T", " ")}` : "Waiting for telemetry";
+  $("perf").textContent = c.rows_ingested ? `${c.rows_ingested.toLocaleString()} rows · last batch ${c.last_ingest_ms} ms` : "";
+  $("t-gpus").textContent = c.gpus_tracked;
+  $("t-urgent").textContent = s.levels.urgent;
+  $("t-warning").textContent = s.levels.warning;
+  $("s-urgent").classList.toggle("hot", s.levels.urgent > 0);
+  $("s-warning").classList.toggle("hot", s.levels.warning > 0);
+  $("t-strag").textContent = s.stragglers.length;
+  $("t-alerts").textContent = c.alerts;
+  $("big-alerts").textContent = c.alerts;
+  headline(s);
+
+  if (!selected && s.risk.length) selected = s.risk[0].gpu_uuid;
+  const maxP = Math.max(0.05, ...s.risk.map(r => r.p24));
+  $("risk").innerHTML = s.risk.length ? s.risk.slice(0, 10).map(r => `
+    <tr class="click ${r.gpu_uuid === selected ? "sel" : ""}" data-uuid="${esc(r.gpu_uuid)}">
+      <td class="gpu">${gpuName(r)}</td>
+      <td><span class="bar" style="width:${Math.round(140 * r.p24 / maxP)}px"></span>${pct(r.p24)}</td>
+      <td class="num">${pct(r.p72)}</td><td class="num">${tag(r.level)}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="empty">No scores yet. The first hour of telemetry is still arriving.</td></tr>';
+  document.querySelectorAll("#risk tr.click").forEach(tr => tr.onclick = () => { selected = tr.dataset.uuid; refresh(); });
+
+  $("alerts").innerHTML = s.alerts.length ? s.alerts.slice(0, 8).map(a => `
+    <tr class="click" data-uuid="${esc(a.gpu_uuid)}"><td class="micro">${shortTime(a.time)}</td>
+      <td class="gpu">${gpuName(a)}</td><td class="why">${(a.reasons || []).map(r => esc(r.label)).join("; ")}</td>
+      <td class="num">${tag(a.level)}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="empty">No alerts yet.</td></tr>';
+  document.querySelectorAll("#alerts tr.click").forEach(tr => tr.onclick = () => { selected = tr.dataset.uuid; refresh(); });
+
+  $("strag").innerHTML = s.stragglers.length ? s.stragglers.map(r => `
+    <tr><td class="gpu">${gpuName(r)}</td><td class="cause">${esc(causeText[r.cause] || r.cause)}</td>
+      <td class="num">${((r.slowdown - 1) * 100).toFixed(0)}% slower</td></tr>`).join("")
+    : '<tr><td colspan="3" class="empty">No stragglers at the latest scrape.</td></tr>';
+
+  if (selected) drawGpu(selected);
+}
+
+async function drawGpu(uuid) {
+  let g;
+  try { const r = await fetch("v1/gpu/" + encodeURIComponent(uuid)); if (!r.ok) return; g = await r.json(); } catch (e) { return; }
+  const cur = g.current || {};
+  $("g-title").textContent = `${cur.node_id || ""} · gpu${cur.gpu_index ?? ""}`;
+  const last = g.alerts[g.alerts.length - 1];
+  $("reasons").innerHTML = last && last.reasons.length
+    ? `<li class="head micro">Last alert ${shortTime(last.time)} · ${last.level}, driven by</li>` + last.reasons.map(r =>
+        `<li><span>${esc(r.label)}</span><span class="val">${r.value ?? "n/a"}</span></li>`).join("")
+    : '<li class="head micro">No alerts for this GPU</li>';
+  chart(g.history);
+}
+
+function chart(hist) {
+  const svg = $("svg"), W = svg.clientWidth || 600, H = 260, m = {l: 44, r: 8, t: 12, b: 28};
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  if (!hist.length) { svg.innerHTML = ""; return; }
+  const ts = hist.map(h => Date.parse(h.time + "Z"));
+  const t0 = Math.min(...ts), t1 = Math.max(t0 + 3600e3, ...ts);
+  const raw = Math.max(0.1, thresholds.p24 * 1.15, thresholds.p72 * 1.15, ...hist.map(h => 1.05 * Math.max(h.p24, h.p72)));
+  const ymax = Math.min(1, Math.ceil(raw * 5) / 5);
+  const x = t => m.l + iw * (t - t0) / (t1 - t0), y = v => m.t + ih * (1 - v / ymax);
+  const ticks = [0, ymax / 2, ymax];
+  let out = ticks.map(v => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="#c8d2c8" stroke-width="1"/>
+    <text x="${m.l - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="#516254">${Math.round(v * 100)}%</text>`).join("");
+  out += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(0)}" y2="${y(0)}" stroke="#000"/>`;
+  for (const [k, lab] of [["p24", "24h threshold"], ["p72", "72h threshold"]]) {
+    const v = thresholds[k];
+    if (v <= ymax) out += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="#93b799" stroke-dasharray="2 2"/>
+      <text x="${m.l + 4}" y="${y(v) - 5}" font-size="11" font-weight="550" fill="#516254" letter-spacing="0.11">${lab.toUpperCase()}</text>`;
+  }
+  const hours = (t1 - t0) / 3600e3, step = hours > 48 ? 24 : hours > 12 ? 6 : 2;
+  for (let t = Math.ceil(t0 / (step * 3600e3)) * step * 3600e3; t <= t1; t += step * 3600e3) {
+    const d = new Date(t);
+    out += `<text x="${x(t)}" y="${H - 8}" text-anchor="middle" font-size="11" fill="#516254">${String(d.getUTCDate()).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}:00</text>`;
+  }
+  const line = (k, attrs) => `<polyline points="${hist.map((h, i) => `${x(ts[i]).toFixed(1)},${y(h[k]).toFixed(1)}`).join(" ")}" fill="none" stroke-width="2" stroke-linejoin="round" ${attrs}/>`;
+  out += line("p72", 'stroke="#516254" stroke-dasharray="5 3"') + line("p24", 'stroke="#121613"');
+  out += `<line id="xh" y1="${m.t}" y2="${m.t + ih}" stroke="#000" stroke-width="1" visibility="hidden"/>
+    <circle id="d72" r="4" fill="#516254" stroke="#fafffa" stroke-width="2" visibility="hidden"/>
+    <circle id="d24" r="5" fill="#2bee4b" stroke="#121613" stroke-width="2" visibility="hidden"/>
+    <rect x="${m.l}" y="${m.t}" width="${iw}" height="${ih}" fill="transparent" id="hit"/>`;
+  svg.innerHTML = out;
+  const tip = $("tip"), hit = $("hit");
+  hit.onmousemove = ev => {
+    const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * W / r.width;
+    let i = 0, best = Infinity;
+    ts.forEach((t, j) => { const d = Math.abs(x(t) - px); if (d < best) { best = d; i = j; } });
+    const h = hist[i], cx = x(ts[i]);
+    for (const [id, k] of [["xh"], ["d24", "p24"], ["d72", "p72"]]) {
+      const el = $(id); el.setAttribute("visibility", "visible");
+      if (k) { el.setAttribute("cx", cx); el.setAttribute("cy", y(h[k])); } else { el.setAttribute("x1", cx); el.setAttribute("x2", cx); }
+    }
+    tip.style.display = "block";
+    tip.innerHTML = `<div class="micro muted">${shortTime(h.time)}</div>Within 24h <b>${pct(h.p24)}</b><br>Within 72h <b>${pct(h.p72)}</b>${h.level ? "<br>" + tag(h.level) : ""}`;
+    const left = cx * r.width / W + 14;
+    tip.style.left = Math.min(left, r.width - tip.offsetWidth - 4) + "px";
+    tip.style.top = "8px";
+  };
+  hit.onmouseleave = () => { tip.style.display = "none"; ["xh", "d24", "d72"].forEach(id => $(id).setAttribute("visibility", "hidden")); };
+}
+
+fetch("healthz").then(r => r.json()).then(h => {
+  if (h.model && h.model.trained_to) $("model").textContent =
+    `Two calibrated LightGBM models, trained on ${h.model.trained_from.slice(0, 10)} to ${h.model.trained_to.slice(0, 10)}. A 72h warning tier and a 24h urgent tier.`;
+}).catch(() => {});
+// Underline the nav link of the section in view.
+const navLinks = [...document.querySelectorAll("nav a")];
+const spy = new IntersectionObserver(es => es.forEach(e => {
+  if (e.isIntersecting) navLinks.forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + e.target.id));
+}), {rootMargin: "-40% 0px -55% 0px"});
+navLinks.forEach(a => { const t = document.querySelector(a.getAttribute("href")); if (t) spy.observe(t); });
+refresh();
+setInterval(refresh, 2000);
+setInterval(() => { if (Date.now() - lastBeat > 6000) $("live").classList.add("stale"); }, 2000);
+</script>
+</body>
+</html>

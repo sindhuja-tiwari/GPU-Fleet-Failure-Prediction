@@ -154,6 +154,91 @@ def _plots(args: argparse.Namespace) -> None:
         print(f"wrote {p}")
 
 
+def _stragglers(args: argparse.Namespace) -> None:
+    from .stragglers import StragglerConfig, run
+
+    d = Path(args.data)
+    tel = pd.read_parquet(d / "telemetry.parquet")
+    truth = pd.read_parquet(d / "stragglers.parquet") if (d / "stragglers.parquet").exists() \
+        else None
+    t0 = time.perf_counter()
+    flags, iv, metrics = run(tel, truth, args.step or _step_of(d), StragglerConfig())
+    out = Path(args.out) if args.out else d / "straggler_intervals.csv"
+    iv.to_csv(out, index=False)
+    print(f"{int(flags['straggler'].sum()):,} straggling scrapes, {len(iv)} intervals "
+          f"in {time.perf_counter() - t0:.1f}s; wrote {out}")
+    if metrics:
+        print(json.dumps(metrics, indent=2, default=str))
+
+
+def _policies(args: argparse.Namespace) -> None:
+    from .experiment import run_policies
+
+    feats = pd.read_parquet(args.features)
+    res = run_policies(feats, max_false_per_1k=args.budget, seed=args.seed,
+                       with_sequence=not args.no_sequence)
+    out = res.write(args.out)
+    cols = ["policy", "eval_horizon", "pr_auc", "caught", "failures", "predictable_recall",
+            "false_alerts_per_1k_gpu_days", "median_lead_hours", "cost_per_1k_gpu_days"]
+    print(res.results[cols].to_string(index=False))
+    print(f"wrote {out}")
+
+
+def _ablations(args: argparse.Namespace) -> None:
+    from .experiment import run_ablations
+
+    res = run_ablations(pd.read_parquet(args.features), max_false_per_1k=args.budget,
+                        seed=args.seed)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    res.to_csv(args.out, index=False)
+    cols = ["dropped", "features_dropped", "pr_auc", "predictable_recall",
+            "false_alerts_per_1k_gpu_days", "median_lead_hours"]
+    print(res[cols].to_string(index=False))
+    print(f"wrote {args.out}")
+
+
+def _train_bundle(args: argparse.Namespace) -> None:
+    from .bundle import train_bundle
+
+    t0 = time.perf_counter()
+    feats = pd.read_parquet(args.features)
+    b = train_bundle(feats, max_false_per_1k=args.budget, seed=args.seed)
+    out = b.save(args.out)
+    print(f"trained on {b.meta['trained_rows']:,} rows ({b.meta['failures']} failures) in "
+          f"{time.perf_counter() - t0:.0f}s; thresholds p24>={b.t24:.3f} (urgent), "
+          f"p72>={b.t72:.3f} (warning); wrote {out}")
+
+
+def _serve(args: argparse.Namespace) -> None:
+    import uvicorn
+
+    from .api import create_app
+
+    rack_map = json.loads(Path(args.rack_map).read_text()) if args.rack_map else None
+    app = create_app(args.bundle, step=args.step, rack_map=rack_map)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+
+
+def _replay(args: argparse.Namespace) -> None:
+    import urllib.request
+
+    from .client import replay_to_url
+
+    d = Path(args.data)
+    tel = pd.read_parquet(d / "telemetry.parquet")
+    if args.days:
+        tel = tel[tel["timestamp"] < tel["timestamp"].min() + pd.Timedelta(days=args.days)]
+    url = args.url.rstrip("/")
+    for _ in range(args.wait):  # the API may still be starting
+        try:
+            urllib.request.urlopen(url + "/healthz", timeout=5).close()
+            break
+        except OSError:
+            time.sleep(1)
+    n = replay_to_url(tel, url, args.step or _step_of(d), args.rate)
+    print(f"replay finished: {n} alerts")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="gpufleet", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -204,6 +289,52 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("--test-days", type=float, default=14)
     b.add_argument("--seed", type=int, default=0)
     b.set_defaults(func=_baselines)
+
+    st = sub.add_parser("stragglers", help="detect stragglers (and score them if truth exists)")
+    st.add_argument("data", help="directory with telemetry.parquet")
+    st.add_argument("--out", help="CSV of straggler intervals (default: in the data dir)")
+    st.add_argument("--step", help="scrape interval (default: from config.json, else 5min)")
+    st.set_defaults(func=_stragglers)
+
+    po = sub.add_parser("policies", help="week 6: calibration, cost thresholds, two-tier alerts")
+    po.add_argument("features", help="labelled feature table")
+    po.add_argument("--out", default="reports/week6", help="output directory")
+    po.add_argument("--budget", type=float, default=5.0)
+    po.add_argument("--seed", type=int, default=0)
+    po.add_argument("--no-sequence", action="store_true", help="skip the sequence model")
+    po.set_defaults(func=_policies)
+
+    ab = sub.add_parser("ablations", help="retrain without each feature family")
+    ab.add_argument("features", help="labelled feature table")
+    ab.add_argument("--out", default="reports/ablations.csv")
+    ab.add_argument("--budget", type=float, default=5.0)
+    ab.add_argument("--seed", type=int, default=0)
+    ab.set_defaults(func=_ablations)
+
+    tb = sub.add_parser("train-bundle", help="train the deployable model bundle")
+    tb.add_argument("features", help="labelled feature table")
+    tb.add_argument("--out", default="models/bundle")
+    tb.add_argument("--budget", type=float, default=5.0)
+    tb.add_argument("--seed", type=int, default=0)
+    tb.set_defaults(func=_train_bundle)
+
+    sv = sub.add_parser("serve", help="run the scoring API and dashboard")
+    sv.add_argument("--bundle", default="models/bundle")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--step", default="5min", help="scrape interval")
+    sv.add_argument("--rack-map", help="JSON file mapping node name to rack")
+    sv.set_defaults(func=_serve)
+
+    rp = sub.add_parser("replay", help="send a dataset to a running API, scrape by scrape")
+    rp.add_argument("data", help="directory with telemetry.parquet")
+    rp.add_argument("--url", default="http://127.0.0.1:8000")
+    rp.add_argument("--rate", type=float, default=0,
+                    help="scrape rounds per second (0: as fast as the API takes them)")
+    rp.add_argument("--days", type=float, help="only the first N days")
+    rp.add_argument("--step", help="scrape interval (default: from config.json, else 5min)")
+    rp.add_argument("--wait", type=int, default=60, help="seconds to wait for the API")
+    rp.set_defaults(func=_replay)
 
     args = parser.parse_args(argv)
     args.func(args)

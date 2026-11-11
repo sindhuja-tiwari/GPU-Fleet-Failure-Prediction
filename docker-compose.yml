@@ -1,0 +1,48 @@
+# Replay demo: a model trained on one simulated fleet scores a different fleet, live.
+#   docker compose up --build            (TRAIN=1 docker compose up --build to retrain)
+#   dashboard:  http://localhost:8000      Prometheus: http://localhost:9090/alerts
+services:
+  trainer:
+    # Copies the pretrained demo bundle into the shared volume. TRAIN=1 trains a new one
+    # instead, on a freshly simulated 512-GPU, 60-day fleet (about 10 minutes on 4 cores).
+    build: .
+    volumes: [data:/data, models:/models]
+    environment:
+      TRAIN: "${TRAIN:-0}"
+    command: >
+      sh -c "if [ \"$$TRAIN\" != 1 ]; then rm -rf /models/bundle && cp -r /app/models/demo-bundle /models/bundle && echo 'using the pretrained demo bundle' && exit 0; fi;
+             gpufleet simulate --out /data/train --nodes 64 --days 60 --seed 1 --failure-rate 0.004 &&
+             gpufleet features /data/train &&
+             gpufleet train-bundle /data/train/features.parquet --out /models/bundle"
+
+  api:
+    build: .
+    depends_on:
+      trainer: {condition: service_completed_successfully}
+    volumes: [models:/models]
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 5s
+      retries: 20
+
+  replayer:
+    build: .
+    depends_on:
+      api: {condition: service_healthy}
+    volumes: [data:/data]
+    # A fleet the model has never seen (different seed), 20 scrape rounds per second:
+    # one simulated day takes about 15 seconds.
+    command: >
+      sh -c "gpufleet simulate --out /data/live --nodes 16 --days 7 --seed 42 --failure-rate 0.01 &&
+             gpufleet replay /data/live --url http://api:8000 --rate 20"
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    depends_on: [api]
+    volumes: ["./deploy/prometheus:/etc/prometheus:ro"]
+    ports: ["9090:9090"]
+
+volumes:
+  data:
+  models:

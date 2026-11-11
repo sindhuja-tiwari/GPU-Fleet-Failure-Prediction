@@ -1,0 +1,70 @@
+{
+  "lightgbm_24h_test": {
+    "brier": 0.0025629853035347475,
+    "ece": 0.0008333152939293312,
+    "base_rate": 0.004181356071165041,
+    "reliability": [
+      {
+        "bin": 0,
+        "rows": 156746,
+        "mean_predicted": 0.0013703542071204688,
+        "observed_rate": 0.002105316882089495
+      },
+      {
+        "bin": 1,
+        "rows": 597,
+        "mean_predicted": 0.01676733019156768,
+        "observed_rate": 0.006700167504187605
+      },
+      {
+        "bin": 2,
+        "rows": 903,
+        "mean_predicted": 0.07502362896186522,
+        "observed_rate": 0.06312292358803986
+      },
+      {
+        "bin": 3,
+        "rows": 315,
+        "mean_predicted": 0.8629447181171318,
+        "observed_rate": 0.8634920634920635
+      }
+    ]
+  },
+  "lightgbm_72h_test": {
+    "brier": 0.009206363270107472,
+    "ece": 0.004841767696054757,
+    "base_rate": 0.013423918711542186,
+    "reliability": [
+      {
+        "bin": 0,
+        "rows": 101253,
+        "mean_predicted": 0.005066753409773057,
+        "observed_rate": 0.009303428046576398
+      },
+      {
+        "bin": 1,
+        "rows": 31616,
+        "mean_predicted": 0.010227479278118404,
+        "observed_rate": 0.005883097165991903
+      },
+      {
+        "bin": 2,
+        "rows": 593,
+        "mean_predicted": 0.06581495529156124,
+        "observed_rate": 0.06070826306913996
+      },
+      {
+        "bin": 3,
+        "rows": 539,
+        "mean_predicted": 0.6036523132164676,
+        "observed_rate": 0.7439703153988868
+      },
+      {
+        "bin": 4,
+        "rows": 237,
+        "mean_predicted": 0.9790652385589095,
+        "observed_rate": 1.0
+      }
+    ]
+  }
+}
