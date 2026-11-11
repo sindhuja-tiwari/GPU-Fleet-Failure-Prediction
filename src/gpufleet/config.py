@@ -24,6 +24,20 @@ FAILURE_MODES: dict[str, dict] = {
 }
 
 
+MAINTENANCE_KINDS = {
+    # kind: (node offline during the window, counters reset afterwards)
+    "reboot": (True, True),
+    "driver_upgrade": (True, True),
+    "drain": (False, False),
+    "gpu_swap": (True, True),  # added automatically when a failed GPU is replaced
+}
+
+TUPLE_FIELDS = (
+    "repair_hours", "chronic_slowdown", "transient_slowdown", "transient_hours",
+    "maintenance_hours", "exporter_outage_hours",
+)
+
+
 @dataclass
 class SimConfig:
     # Fleet shape
@@ -63,8 +77,21 @@ class SimConfig:
     noisy_nvlink_frac: float = 0.03  # healthy links with occasional CRC errors
     benign_xid_rate_per_gpu_day: float = 0.05  # application faults (Xid 13, 31, 43)
 
+    # Maintenance (week 2). Reboots and driver upgrades take the node offline and reset
+    # the DCGM counters on every GPU in it. Drains keep telemetry flowing but stop new jobs.
+    maintenance_rate_per_node_day: float = 1 / 14
+    maintenance_mix: dict[str, float] = field(
+        default_factory=lambda: {"reboot": 0.4, "driver_upgrade": 0.3, "drain": 0.3}
+    )
+    maintenance_hours: tuple[float, float] = (0.5, 4.0)
+    gpu_swap_hours: float = 1.0  # node is down this long when a failed GPU is replaced
+
     # Collection
     scrape_drop_prob: float = 0.001  # chance a single sample is missing
+    exporter_outage_rate_per_node_day: float = 0.05  # exporter or scraper down, node keeps running
+    exporter_outage_hours: tuple[float, float] = (0.25, 3.0)
+    clock_skew_s: float = 20.0  # std dev of each node's fixed clock offset, seconds
+    scrape_jitter_s: float = 3.0  # std dev of per-scrape timing noise, seconds
 
     @property
     def n_gpus(self) -> int:
@@ -88,6 +115,13 @@ class SimConfig:
             raise ValueError(f"unknown failure modes: {sorted(unknown)}")
         if any(w < 0 for w in self.mode_mix.values()) or sum(self.mode_mix.values()) <= 0:
             raise ValueError("mode_mix weights must be non-negative and not all zero")
+        unknown = set(self.maintenance_mix) - (set(MAINTENANCE_KINDS) - {"gpu_swap"})
+        if unknown:
+            raise ValueError(f"unknown maintenance kinds: {sorted(unknown)}")
+        if self.clock_skew_s < 0 or self.scrape_jitter_s < 0:
+            raise ValueError("clock_skew_s and scrape_jitter_s must be non-negative")
+        if 3 * (self.clock_skew_s + self.scrape_jitter_s) >= self.step_minutes * 30:
+            raise ValueError("clock skew is too large to align scrapes to the step grid")
 
     def to_json(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(asdict(self), indent=2))
@@ -95,7 +129,7 @@ class SimConfig:
     @classmethod
     def from_json(cls, path: str | Path) -> SimConfig:
         raw = json.loads(Path(path).read_text())
-        for key in ("repair_hours", "chronic_slowdown", "transient_slowdown", "transient_hours"):
+        for key in TUPLE_FIELDS:
             if key in raw:
                 raw[key] = tuple(raw[key])
         return cls(**raw)

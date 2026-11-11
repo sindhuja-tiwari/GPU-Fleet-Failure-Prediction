@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from gpufleet.clean import align_timestamps, counter_increments
 from gpufleet.config import FAILURE_MODES, SimConfig
 from gpufleet.simulator import simulate
 
@@ -19,16 +20,27 @@ def test_different_seed_gives_different_data(small_cfg):
     assert not a.telemetry["power_w"].equals(b.telemetry["power_w"])
 
 
-def test_row_count_and_time_grid(sim, small_cfg):
+def test_row_count_and_time_grid(sim, aligned, small_cfg):
     tel = sim.telemetry
     full = small_cfg.n_steps * small_cfg.n_gpus
-    assert 0.8 * full < len(tel) <= full  # offline repairs and scrape drops remove some rows
+    assert 0.8 * full < len(tel) <= full  # repairs, maintenance and lost scrapes remove rows
+    assert len(aligned) == len(tel)  # skew never pushes two scrapes onto one step
     step = pd.Timedelta(minutes=small_cfg.step_minutes)
-    assert ((tel["timestamp"] - tel["timestamp"].min()) % step == pd.Timedelta(0)).all()
+    start = pd.Timestamp(small_cfg.start)
+    assert ((aligned["timestamp"] - start) % step == pd.Timedelta(0)).all()
 
 
-def test_every_observed_failure_ends_with_its_fatal_xid(sim):
-    tel = sim.telemetry
+def test_clock_skew_is_per_node_and_bounded(aligned, small_cfg):
+    offset = (aligned["raw_timestamp"] - aligned["timestamp"]).dt.total_seconds()
+    assert offset.abs().max() < 4 * (small_cfg.clock_skew_s + small_cfg.scrape_jitter_s)
+    assert offset.abs().max() > 1  # skew is actually there
+    # GPUs on one node are scraped together, so they share a raw timestamp.
+    per_scrape = aligned.groupby(["node_id", "timestamp"], observed=True)["raw_timestamp"]
+    assert (per_scrape.nunique() == 1).all()
+
+
+def test_every_observed_failure_ends_with_its_fatal_xid(sim, aligned):
+    tel = aligned
     observed = sim.failures[sim.failures["observed"]]
     assert len(observed) > 0
     last = tel.sort_values("timestamp").groupby("gpu_uuid", observed=True).tail(1)
@@ -39,8 +51,8 @@ def test_every_observed_failure_ends_with_its_fatal_xid(sim):
         assert row["xid"] == FAILURE_MODES[f["mode"]]["fatal_xid"]
 
 
-def test_failed_slot_is_offline_until_repaired(sim):
-    tel = sim.telemetry
+def test_failed_slot_is_offline_until_repaired(sim, aligned):
+    tel = aligned
     observed = sim.failures[sim.failures["observed"]]
     for _, f in observed.iterrows():
         slot = tel[(tel["node_id"] == f["node_id"]) & (tel["gpu_index"] == f["gpu_index"])]
@@ -59,15 +71,13 @@ def test_onset_comes_before_failure(sim):
     assert (predictable["failure_time"] - predictable["onset_time"] >= pd.Timedelta(hours=1)).all()
 
 
-def _rate_change(tel, failure, column):
-    g = tel[tel["gpu_uuid"] == failure["gpu_uuid"]].set_index("timestamp")[column]
-    window = pd.Timedelta(hours=12)
+def _rate_change(inc, failure, column):
+    """Mean per-scrape increment before onset vs. in the last 12 hours before failure."""
+    g = inc[inc["gpu_uuid"] == failure["gpu_uuid"]].set_index("timestamp")[column + "_inc"]
     end = failure["failure_time"]
     before = g[: failure["onset_time"]]
-    late = g[end - window : end - pd.Timedelta(minutes=5)]
-    base = (before.iloc[-1] - before.iloc[0]) / max(len(before), 1) if len(before) > 1 else 0
-    late_rate = (late.iloc[-1] - late.iloc[0]) / max(len(late), 1)
-    return base, late_rate
+    late = g[end - pd.Timedelta(hours=12) : end - pd.Timedelta(minutes=5)]
+    return (before.mean() if len(before) else 0.0), late.mean()
 
 
 @pytest.mark.parametrize(
@@ -80,7 +90,8 @@ def test_degradation_raises_error_rates(mode, column):
     res = simulate(cfg)
     observed = res.failures[res.failures["observed"]]
     assert len(observed) >= 3
-    rates = [_rate_change(res.telemetry, f, column) for _, f in observed.iterrows()]
+    inc = counter_increments(align_timestamps(res.telemetry), [column])
+    rates = [_rate_change(inc, f, column) for _, f in observed.iterrows()]
     assert np.mean([late > base for base, late in rates]) >= 0.8
 
 

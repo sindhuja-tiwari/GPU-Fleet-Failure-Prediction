@@ -11,8 +11,13 @@ How it works, in three passes:
    the degradation progress of each GPU, and a few benign look-alikes (noisy ECC counters,
    noisy NVLinks, application Xids) so that no single signal gives the answer away.
 
-Ground truth (failure onsets, straggler intervals) is written to separate tables and never
-appears in the telemetry itself.
+On top of that sits the mess of real collection (added in week 2): node maintenance that
+takes nodes offline and resets DCGM counters, exporter outages, dropped scrapes, and node
+clocks that are a few seconds off, so timestamps do not land exactly on the step grid.
+
+Ground truth (failure onsets, straggler intervals, maintenance) is written to separate
+tables and never appears in the telemetry itself. Ground-truth times are on the exact
+step grid; telemetry timestamps carry each node's clock skew.
 """
 
 from __future__ import annotations
@@ -23,8 +28,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .config import FAILURE_MODES, SimConfig
-from .schema import COLUMN_NAMES, FAILURE_COLUMNS, STRAGGLER_COLUMNS
+from .config import FAILURE_MODES, MAINTENANCE_KINDS, SimConfig
+from .schema import COLUMN_NAMES, FAILURE_COLUMNS, MAINTENANCE_COLUMNS, STRAGGLER_COLUMNS
 
 MODE_NAMES = ["none", *FAILURE_MODES]  # index 0 = healthy
 MODE_CODE = {m: i for i, m in enumerate(MODE_NAMES)}
@@ -58,6 +63,7 @@ class SimResult:
     failures: pd.DataFrame
     stragglers: pd.DataFrame
     inventory: pd.DataFrame
+    maintenance: pd.DataFrame
     config: SimConfig
 
     def write(self, out_dir: str | Path) -> Path:
@@ -67,6 +73,7 @@ class SimResult:
         self.failures.to_parquet(out / "failures.parquet", index=False)
         self.stragglers.to_parquet(out / "stragglers.parquet", index=False)
         self.inventory.to_parquet(out / "inventory.parquet", index=False)
+        self.maintenance.to_parquet(out / "maintenance.parquet", index=False)
         self.config.to_json(out / "config.json")
         return out
 
@@ -110,8 +117,46 @@ def _sample_lives(cfg: SimConfig, rng: np.random.Generator) -> list[Life]:
     return lives
 
 
-def _workload(cfg: SimConfig, rng: np.random.Generator, node_fail: np.ndarray):
-    """Return busy (T,N) bool, job index (T,N) int (-1 idle), and per-job parameters."""
+def _sample_intervals(
+    rng: np.random.Generator, n_units: int, T: int, rate_per_unit: float, hours, sph: float
+) -> list[tuple[int, int, int]]:
+    """Random (unit, start, end) intervals: Poisson count per unit, uniform start and length."""
+    out = []
+    for u in range(n_units):
+        for _ in range(rng.poisson(rate_per_unit)):
+            s0 = int(rng.integers(T))
+            s1 = min(T, s0 + max(1, int(rng.uniform(*hours) * sph)))
+            out.append((u, s0, s1))
+    return out
+
+
+def _maintenance(cfg: SimConfig, rng: np.random.Generator, lives: list[Life], node_of):
+    """Scheduled maintenance per node, plus a short outage whenever a failed GPU is swapped."""
+    T, sph = cfg.n_steps, cfg.steps_per_hour
+    kinds = list(cfg.maintenance_mix)
+    w = np.array([cfg.maintenance_mix[k] for k in kinds], dtype=float)
+    events = []
+    if kinds and w.sum() > 0:
+        w /= w.sum()
+        rate = cfg.maintenance_rate_per_node_day * cfg.days
+        for n, s0, s1 in _sample_intervals(rng, cfg.n_nodes, T, rate, cfg.maintenance_hours, sph):
+            events.append((n, kinds[rng.choice(len(kinds), p=w)], s0, s1))
+    for lf in lives:
+        if lf.repaired_step is not None and lf.repaired_step < T:
+            s1 = lf.repaired_step
+            s0 = max(0, s1 - max(1, int(cfg.gpu_swap_hours * sph)))
+            events.append((int(node_of[lf.slot]), "gpu_swap", s0, s1))
+    return sorted(events, key=lambda e: (e[2], e[0]))
+
+
+def _workload(
+    cfg: SimConfig, rng: np.random.Generator, node_fail: np.ndarray, node_block: np.ndarray
+):
+    """Return busy (T,N) bool, job index (T,N) int (-1 idle), and per-job parameters.
+
+    ``node_block`` marks steps where the node is down or drained: running jobs are stopped
+    and no new job starts.
+    """
     T, N = cfg.n_steps, cfg.n_nodes
     sph = cfg.steps_per_hour
     p_start = 1 / (2 * sph)  # idle spells average 2 hours
@@ -121,8 +166,9 @@ def _workload(cfg: SimConfig, rng: np.random.Generator, node_fail: np.ndarray):
     current = np.where(rng.random(N) < 0.8, np.arange(N), -1)
     n_jobs = N
     for t in range(T):
+        current = np.where(node_block[t], -1, current)
         idle = current < 0
-        start = idle & (rng.random(N) < p_start)
+        start = idle & ~node_block[t] & (rng.random(N) < p_start)
         n_new = int(start.sum())
         current[start] = np.arange(n_jobs, n_jobs + n_new)
         n_jobs += n_new
@@ -181,9 +227,33 @@ def simulate(cfg: SimConfig | None = None) -> SimResult:
     noisy_nvl = (rng.random(L) < cfg.noisy_nvlink_frac).astype(np.float32)
     temp_offset = rng.normal(0, 2.5, L).astype(np.float32)
 
-    # ---- 2. Workload ---------------------------------------------------------------
+    # ---- 2. Maintenance, collection outages and workload -------------------------
+    maint = _maintenance(cfg, rng, lives, node_of)
+    node_down = np.zeros((T, cfg.n_nodes), dtype=bool)
+    node_block = np.zeros((T, cfg.n_nodes), dtype=bool)
+    reset_n = np.zeros((T, cfg.n_nodes), dtype=bool)
+    for n, kind, s0, s1 in maint:
+        offline, resets = MAINTENANCE_KINDS[kind]
+        node_block[s0:s1, n] = True
+        if offline:
+            node_down[s0:s1, n] = True
+        if resets and s1 < T:
+            reset_n[s1, n] = True
+    outage = np.zeros((T, cfg.n_nodes), dtype=bool)
+    outage_rate = cfg.exporter_outage_rate_per_node_day * cfg.days
+    for n, s0, s1 in _sample_intervals(
+        rng, cfg.n_nodes, T, outage_rate, cfg.exporter_outage_hours, sph
+    ):
+        outage[s0:s1, n] = True
+
+    down = node_down[:, node_of]
+    reset = reset_n[:, node_of]
+    reset[0] = True
+    for lf in lives:
+        reset[lf.start, lf.slot] = True
+
     node_fail = fatal.reshape(T, cfg.n_nodes, cfg.gpus_per_node).any(axis=2)
-    busy_n, job_n, job_base_ms, job_util, job_mem = _workload(cfg, rng, node_fail)
+    busy_n, job_n, job_base_ms, job_util, job_mem = _workload(cfg, rng, node_fail, node_block)
     busy = busy_n[:, node_of] & online
     job = job_n[:, node_of]
     jb = np.where(job >= 0, job, 0)
@@ -264,21 +334,28 @@ def simulate(cfg: SimConfig | None = None) -> SimResult:
         xid[fatal & is_mode[m]] = spec["fatal_xid"]
 
     def lifetime_total(x: np.ndarray) -> np.ndarray:
-        x = np.where(online, x, 0).astype(np.int64)
+        """Cumulative counter that restarts at a new GPU or after a reboot / driver reload."""
+        x = np.where(online & ~down, x, 0).astype(np.int64)
         c = np.cumsum(x, axis=0)
-        for lf in lives:
-            if lf.start > 0:
-                c[lf.start : lf.end, lf.slot] -= c[lf.start - 1, lf.slot]
-        return c
+        last_reset = np.maximum.accumulate(np.where(reset, steps[:, None], 0), axis=0)
+        return c - np.take_along_axis(c - x, last_reset, axis=0)
 
     noise = rng.lognormal(0, 0.03, (T, G)) * rng.lognormal(0, 0.02, (T, cfg.n_nodes))[:, node_of]
     step_ms = np.where(busy, job_base_ms[jb] * total_slow * noise, np.nan).astype(np.float32)
 
     # ---- Assemble ------------------------------------------------------------------
-    keep = online & ((rng.random((T, G)) >= cfg.scrape_drop_prob) | fatal)
+    scraped = ~down & ~outage[:, node_of] & (rng.random((T, G)) >= cfg.scrape_drop_prob)
+    keep = online & (scraped | fatal)
     t_idx, g_idx = np.nonzero(keep)
     start = pd.Timestamp(cfg.start)
-    timestamps = start + pd.to_timedelta(steps * cfg.step_minutes, unit="min")
+    grid = start + pd.to_timedelta(steps * cfg.step_minutes, unit="min")
+    grid_ns = grid.as_unit("ns").asi8
+    # Every GPU on a node is scraped together, so skew and jitter are per node.
+    skew_s = rng.normal(0, cfg.clock_skew_s, cfg.n_nodes)
+    offset_s = skew_s[None, :] + rng.normal(0, cfg.scrape_jitter_s, (T, cfg.n_nodes))
+    n_idx = node_of[g_idx]
+    ts_ns = grid_ns[t_idx] + np.round(offset_s[t_idx, n_idx] * 1e9).astype(np.int64)
+    timestamps = pd.to_datetime(ts_ns, unit="ns").round("ms").as_unit("ms")
 
     uuids = np.array([lf.uuid for lf in lives])
     node_names = np.array([f"node-{n:03d}" for n in range(cfg.n_nodes)])
@@ -289,7 +366,7 @@ def simulate(cfg: SimConfig | None = None) -> SimResult:
 
     tel = pd.DataFrame(
         {
-            "timestamp": timestamps[t_idx],
+            "timestamp": timestamps,
             "rack_id": rack_names[rack_of_node[node_of[g_idx]]],
             "node_id": node_names[node_of[g_idx]],
             "gpu_index": (g_idx % cfg.gpus_per_node).astype(np.int16),
@@ -389,4 +466,20 @@ def simulate(cfg: SimConfig | None = None) -> SimResult:
         ]
     )
 
-    return SimResult(tel, failures, stragglers, inventory, cfg)
+    maintenance = pd.DataFrame(
+        [
+            {
+                "node_id": node_names[n],
+                "rack_id": rack_names[rack_of_node[n]],
+                "kind": kind,
+                "start": ts(s0),
+                "end": ts(s1),
+                "node_offline": MAINTENANCE_KINDS[kind][0],
+                "resets_counters": MAINTENANCE_KINDS[kind][1],
+            }
+            for n, kind, s0, s1 in maint
+        ],
+        columns=MAINTENANCE_COLUMNS,
+    )
+
+    return SimResult(tel, failures, stragglers, inventory, maintenance, cfg)
