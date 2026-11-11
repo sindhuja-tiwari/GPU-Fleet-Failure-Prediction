@@ -87,6 +87,13 @@ they are installed and otherwise falls back to Inter and Newsreader, which ship 
 package under the SIL Open Font License (`src/gpufleet/static/fonts`). The page needs no
 internet access.
 
+Two motion details come from the same style. While the page scrolls, the middle of each
+section boundary swells in the direction of travel, in proportion to the scroll speed, and eases
+back flat when scrolling stops. Moving between sections, or out to the API docs, drops a
+press-black curtain from the top whose leading edge hangs down in the middle and flattens as it
+lands; it names the destination, then falls away through the bottom. Both are off when the
+browser asks for reduced motion.
+
 ## Running it
 
 With Docker:

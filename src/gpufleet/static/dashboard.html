@@ -64,7 +64,7 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--surface-canvas); color: var(--color-typesetter-ink); }
-html { scroll-behavior: smooth; scroll-padding-top: 70px; }
+html { scroll-padding-top: 70px; }
 /* base-3: 16px / 200 / 1.4 / 0.01em */
 body { font: var(--font-weight-extralight) 16px/1.4 var(--font-twk-lausanne); letter-spacing: 0.01em;
   -webkit-font-smoothing: antialiased; }
@@ -129,7 +129,7 @@ h1 em { font-family: var(--font-editorial-new); font-weight: 300; font-style: it
 .stat.hot .v span { box-shadow: inset 0 -0.14em 0 var(--color-highlighter-green); }
 
 /* Sections, 80px apart */
-section.light { padding: var(--section-gap) 0; }
+section.light { padding: var(--section-gap) 0; background: var(--surface-canvas); }
 .sec-head { margin-bottom: var(--spacing-30); }
 /* 5xl: PP Mondwest 60px / 0.9 / -0.04em */
 h2 { font: var(--font-weight-regular) clamp(40px, 5vw, var(--text-subheading))/var(--leading-subheading) var(--font-pp-mondwest);
@@ -224,6 +224,27 @@ footer { background: var(--surface-dark-section); color: var(--color-bone-white)
 .band .row { display: flex; justify-content: space-between; gap: var(--element-gap); color: var(--color-press-black);
   margin-top: var(--spacing-40); flex-wrap: wrap; }
 
+/* Curved edges between sections. At rest they are flat; while the page scrolls, the middle of
+   each boundary swells in the scroll direction like a soft bump and eases back flat when the
+   scrolling stops. Drawn by drawEdges() in the script; its height is set there too. */
+section, footer, .band { position: relative; }
+section > .wrap, footer > .wrap, .band > .wrap { position: relative; z-index: 1; }
+.edge { position: absolute; left: 0; width: 100%; z-index: 0; pointer-events: none; display: block; }
+
+/* Page transition: a press-black curtain drops in with its leading edge pulled down in the
+   middle, settles flat while it names where you are going, then falls away below. */
+#curtain { position: fixed; left: 0; top: 0; width: 100%; height: 100vh; z-index: 100;
+  background: var(--surface-dark-section); color: var(--color-bone-white); pointer-events: none;
+  display: flex; align-items: center; will-change: transform, clip-path; }
+#curtain.idle { visibility: hidden; }
+#curtain .wrap { width: 100%; }
+#curtain .c-kicker { color: var(--color-muted-sage); margin-bottom: var(--spacing-20); }
+#curtain .c-title { font: var(--font-weight-regular) clamp(64px, 11vw, 165px)/0.9 var(--font-pp-mondwest);
+  letter-spacing: -0.04em; }
+#curtain .c-title span { background: linear-gradient(transparent 50%, var(--color-highlighter-green) 50%,
+  var(--color-highlighter-green) 74%, transparent 74%); color: var(--color-bone-white); }
+@media (prefers-reduced-motion: reduce) { #curtain { display: none; } }
+
 @media (max-width: 960px) {
   nav { display: none; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -248,6 +269,9 @@ footer { background: var(--surface-dark-section); color: var(--color-bone-white)
 </style>
 </head>
 <body>
+<div id="curtain" aria-hidden="true">
+  <div class="wrap"><div class="micro c-kicker" id="c-kicker">gpufleet</div><div class="c-title" id="c-title">Fleet <span>health</span></div></div>
+</div>
 <div class="mast-bar">
   <header class="wrap mast">
     <a class="wordmark" href="./"><u>gpu</u>fleet</a>
@@ -308,7 +332,7 @@ footer { background: var(--surface-dark-section); color: var(--color-bone-white)
     </div>
   </section>
 
-  <section class="dark" id="alerts-sec">
+  <section class="dark" id="alerts-sec" data-above="#fafffa">
     <div class="wrap">
       <div class="dark-head">
         <div><div class="micro muted">03 — Alerts</div><h2>Every alert says why.</h2></div>
@@ -321,7 +345,7 @@ footer { background: var(--surface-dark-section); color: var(--color-bone-white)
     </div>
   </section>
 
-  <section class="light" id="stragglers">
+  <section class="light" id="stragglers" data-above="#121613">
     <div class="wrap cols">
       <div>
         <div class="sec-head"><div class="micro muted">04 — Stragglers</div><h2>Slowing their job</h2></div>
@@ -343,7 +367,7 @@ footer { background: var(--surface-dark-section); color: var(--color-bone-white)
   </section>
 </main>
 
-<footer id="about">
+<footer id="about" data-above="#fafffa">
   <div class="wrap foot">
     <div><div class="micro">Model</div><p id="model">Two LightGBM models, calibrated, with a 72h warning tier and a 24h urgent tier.</p></div>
     <div><div class="micro">Endpoints</div>
@@ -352,7 +376,7 @@ footer { background: var(--surface-dark-section); color: var(--color-bone-white)
     <div><div class="micro">Ingest</div><p>POST JSON rows to /v1/telemetry, or raw DCGM exporter text to /v1/scrape.</p></div>
   </div>
 </footer>
-<div class="band">
+<div class="band" data-above="#121613">
   <div class="wrap">
     <div class="display" aria-hidden="true">gpufleet</div>
     <div class="row micro"><span>Failure risk and stragglers from GPU telemetry</span><span>Simulated data · see the model card</span></div>
@@ -497,6 +521,115 @@ fetch("healthz").then(r => r.json()).then(h => {
   if (h.model && h.model.trained_to) $("model").textContent =
     `Two calibrated LightGBM models, trained on ${h.model.trained_from.slice(0, 10)} to ${h.model.trained_to.slice(0, 10)}. A 72h warning tier and a 24h urgent tier.`;
 }).catch(() => {});
+// ---- Curved section edges that bump with scroll speed ----
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+// Largest bump in px: big on wide screens, small on phones.
+const maxBump = () => innerWidth >= 1200 ? 300 : innerWidth >= 768 ? 200 : 75;
+let M = maxBump();
+const edgeEls = [...document.querySelectorAll("[data-above]")].map(sec => {
+  const below = getComputedStyle(sec).backgroundColor;
+  sec.insertAdjacentHTML("afterbegin",
+    `<svg class="edge" preserveAspectRatio="none" aria-hidden="true">
+       <rect width="1000" fill="${below}"/><path fill="${sec.dataset.above}"/></svg>`);
+  return sec.querySelector(".edge");
+});
+function sizeEdges() {
+  M = maxBump();
+  edgeEls.forEach(svg => {
+    svg.setAttribute("viewBox", `0 0 1000 ${2 * M}`);
+    svg.style.height = `${2 * M}px`; svg.style.top = `${-M}px`;
+    svg.querySelector("rect").setAttribute("height", 2 * M);
+  });
+}
+function drawEdges(bump) {
+  // bump > 0: the lower section swells up into the one above; bump < 0: the upper one sags down.
+  // The shoulders stay flat and only the middle moves, so it reads as a bump, not a tilt.
+  const y = M, c = (M - bump).toFixed(1);
+  const d = `M0 0 H1000 V${y} C650 ${y} 650 ${c} 500 ${c} C350 ${c} 350 ${y} 0 ${y} Z`;
+  edgeEls.forEach(svg => svg.querySelector("path").setAttribute("d", d));
+}
+sizeEdges(); drawEdges(0);
+addEventListener("resize", () => { sizeEdges(); drawEdges(0); });
+if (!reduceMotion) {
+  let lastY = scrollY, lastT = performance.now(), bump = 0, drawn = 0;
+  const tick = now => {
+    const dt = Math.max(1, now - lastT), v = (scrollY - lastY) / dt * 1000;   // px per second
+    lastY = scrollY; lastT = now;
+    const k = dt / (1000 / 60);                       // frames elapsed, so the feel holds at 120Hz
+    if (Math.abs(v) < 1e4) bump += 0.01 * v * k;      // each frame pushes the bump with the speed...
+    bump *= Math.pow(0.9, k);                         // ...and it eases back flat on its own
+    bump = Math.max(-M, Math.min(M, bump));
+    if (Math.abs(bump) < 0.3) bump = 0;
+    if (bump !== drawn) { drawEdges(bump); drawn = bump; }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+// ---- Page transitions: a curtain that drops in and falls away ----
+const curtain = $("curtain");
+const easeOut = t => 1 - Math.pow(1 - t, 3), easeIn = t => t * t * t;
+function animate(ms, frame) {
+  return new Promise(done => {
+    const t0 = performance.now();
+    curtain.classList.remove("idle");
+    const step = now => {
+      const t = Math.min(1, (now - t0) / ms);
+      frame(t);
+      if (t < 1) requestAnimationFrame(step); else done();
+    };
+    requestAnimationFrame(step);
+  });
+}
+// Cover: the curtain drops from above. Its bottom edge starts with the sides pulled up to half
+// the screen and the middle hanging down, and flattens as it lands.
+const cover = () => animate(900, t => {
+  const e = easeOut(t), W = innerWidth, H = innerHeight, s = (H * (0.5 + 0.5 * e)).toFixed(1);
+  curtain.style.transform = `translateY(${(-H * (1 - e)).toFixed(1)}px)`;
+  curtain.style.clipPath = `path('M0 ${s} C${0.35 * W} ${s} ${0.35 * W} ${H} ${0.5 * W} ${H} ` +
+    `C${0.65 * W} ${H} ${0.65 * W} ${s} ${W} ${s} L${W} 0 L0 0 Z')`;
+});
+// Reveal: it keeps falling and leaves through the bottom, its top edge rounding into a dome.
+const reveal = () => animate(900, t => {
+  const e = easeIn(t), W = innerWidth, H = innerHeight, s = (0.1 * H * e).toFixed(1);
+  curtain.style.transform = `translateY(${(H * e).toFixed(1)}px)`;
+  curtain.style.clipPath = `path('M0 ${s} C${0.35 * W} ${s} ${0.35 * W} 0 ${0.5 * W} 0 ` +
+    `C${0.65 * W} 0 ${0.65 * W} ${s} ${W} ${s} L${W} ${H} L0 ${H} Z')`;
+}).then(() => curtain.classList.add("idle"));
+function label(kicker, title) {
+  $("c-kicker").textContent = kicker;
+  const words = title.split(" "), last = words.pop();
+  $("c-title").innerHTML = (words.length ? esc(words.join(" ")) + " " : "") + `<span>${esc(last)}</span>`;
+}
+const sectionNames = {"#ranking": ["01 — Ranking", "Highest risk"], "#alerts-sec": ["03 — Alerts", "Recent alerts"],
+  "#stragglers": ["04 — Stragglers", "Slowing their job"], "#about": ["Footer", "The model"]};
+const pageNames = {"docs": ["API", "Interactive docs"], "metrics": ["Prometheus", "Raw metrics"]};
+let busy = false;
+document.addEventListener("click", async ev => {
+  const a = ev.target.closest("a[href]");
+  if (!a || reduceMotion || busy || ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey ||
+      ev.shiftKey || ev.altKey || a.target === "_blank") return;
+  const href = a.getAttribute("href");
+  if (href === "./") return;
+  ev.preventDefault(); busy = true;
+  if (href.startsWith("#")) {
+    const [k, t] = sectionNames[href] || ["gpufleet", a.textContent.trim()];
+    label(k, t); await cover();
+    const el = document.querySelector(href);
+    if (el) window.scrollTo({top: el.getBoundingClientRect().top + scrollY - 70, behavior: "instant"});
+    history.replaceState(null, "", href);
+    await new Promise(r => setTimeout(r, 200));   // a beat to read the name
+    await reveal(); busy = false;
+  } else {
+    const [k, t] = pageNames[href] || ["Leaving the dashboard", href.replace(/^v1\//, "/v1/")];
+    label(k, t); await cover();
+    location.href = a.href;
+  }
+});
+// Arriving: the curtain starts down and lifts. Coming back from the browser cache, lift it again.
+if (reduceMotion) curtain.classList.add("idle"); else setTimeout(reveal, 350);
+addEventListener("pageshow", ev => { if (ev.persisted) { busy = false; reveal(); } });
+
 // Underline the nav link of the section in view.
 const navLinks = [...document.querySelectorAll("nav a")];
 const spy = new IntersectionObserver(es => es.forEach(e => {
