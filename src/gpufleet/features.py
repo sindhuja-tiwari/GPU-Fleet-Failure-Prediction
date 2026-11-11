@@ -122,11 +122,33 @@ def build_features(
     tel: pd.DataFrame, step: str = "5min", windows: tuple[int, ...] = WINDOWS
 ) -> pd.DataFrame:
     """Build the hourly feature table from raw telemetry."""
+    return features_from_buckets(hourly_buckets(scrape_signals(tel, step)), step, windows)
+
+
+SINCE_INSTALL = ("sbe", "retired", "nvlink", "pcie")
+
+
+def features_from_buckets(
+    buckets: pd.DataFrame,
+    step: str = "5min",
+    windows: tuple[int, ...] = WINDOWS,
+    offsets: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Features from hourly buckets (output of ``hourly_buckets``).
+
+    ``offsets`` (indexed by gpu_uuid) carries history that is no longer in ``buckets``, for
+    the streaming scorer: ``hours`` already seen and ``<name>_n`` error counts for the
+    since-install features. Windows only need the last ``max(windows)`` hours.
+    """
     scrapes_per_hour = pd.Timedelta("1h") / pd.Timedelta(step)
-    h = _complete_grid(hourly_buckets(scrape_signals(tel, step)))
+    h = _complete_grid(buckets)
     f = h[["gpu_uuid", "node_id", "rack_id", "gpu_index", "time"]].copy()
     f["gpu_index"] = f["gpu_index"].astype(int)
-    f["hours_seen"] = h["hour_idx"] + 1
+    off = None
+    if offsets is not None and len(offsets):
+        off = offsets.reindex(h["gpu_uuid"]).fillna(0).reset_index(drop=True)
+        off.index = h.index
+    f["hours_seen"] = h["hour_idx"] + 1 + (off["hours"] if off is not None else 0)
 
     roll = {}
     for w in windows:
@@ -168,9 +190,22 @@ def build_features(
             f[f"temp_trend_{w}h"] = _trend(h, "temp_vs_node_sum", "temp_vs_node_cnt", w)
         f["temp_max_1h"] = h["temp_max"].where(h["scrapes"] > 0)
 
+    # Raw values of this one hour, for sequence models (not used by the tabular models).
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cov1 = np.where(h["covered"] > 0, h["covered"], np.nan)
+        for name in ("sbe", "nvlink", "pcie", "retired"):
+            f[f"seq_{name}"] = h[f"{name}_n"] * scrapes_per_hour / cov1
+        for sig in ("temp_vs_node", "clock_vs_node", "step_vs_node"):
+            cnt = h[f"{sig}_cnt"]
+            f[f"seq_{sig}"] = h[f"{sig}_sum"] / cnt.where(cnt > 0)
+        f["seq_throttle_thermal"] = h["throttle_thermal_n"] / h["scrapes"].where(h["scrapes"] > 0)
+        f["seq_coverage"] = h["scrapes"] / scrapes_per_hour
+
     # Errors since this GPU was first seen (survives counter resets).
-    for name in ("sbe", "retired", "nvlink", "pcie"):
+    for name in SINCE_INSTALL:
         f[f"{name}_since_install"] = h.groupby("gpu_uuid", sort=False)[f"{name}_n"].cumsum()
+        if off is not None:
+            f[f"{name}_since_install"] += off[f"{name}_n"]
     f["time"] = pd.to_datetime(f["time"]).dt.as_unit("ms")
     for c in ("gpu_uuid", "node_id", "rack_id"):
         f[c] = f[c].astype(str)
@@ -195,5 +230,6 @@ def feature_columns(df: pd.DataFrame) -> list[str]:
     """Model inputs: everything except keys, labels and analysis-only columns."""
     skip = set(KEY_COLUMNS) | {"hours_seen", "score", "part"}
     return [c for c in df.columns
-            if c not in skip and not c.startswith(("label_", "ttf_", "fail_", "mode"))
+            if c not in skip
+            and not c.startswith(("label_", "ttf_", "fail_", "mode", "seq_"))
             and pd.api.types.is_numeric_dtype(df[c])]

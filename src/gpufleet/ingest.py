@@ -239,7 +239,8 @@ def to_telemetry(
     out["step_compute_ms"] = (
         wide.loc[out.index, "step_compute_ms"] if "step_compute_ms" in wide.columns else np.nan
     )
-    out["rack_id"] = out["node_id"].map(rack_map or {}).fillna("unknown")
+    racks = rack_map or {}
+    out["rack_id"] = [racks.get(n, "unknown") for n in out["node_id"]]
     return _cast(out)
 
 

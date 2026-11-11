@@ -1,0 +1,20 @@
+{
+  "oof_days": 20,
+  "oof_failures": 38,
+  "val_window_failures": 15,
+  "thresholds": {
+    "lightgbm_24h_budget": 0.2535211267605634,
+    "lightgbm_72h_budget": 0.6485148514851485,
+    "lightgbm_24h_cost": 0.5,
+    "two_tier_t24": 0.5,
+    "two_tier_t72": 0.9152542372881356
+  },
+  "cost_model": {
+    "false_alert": 1.0,
+    "missed": 20.0,
+    "caught_base": 2.0,
+    "late_penalty": 8.0,
+    "plan_hours": 12.0
+  },
+  "lookback_hours": 48
+}

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU fleet health</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e;
+  --muted: #898781; --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6; --series-2: #eb6834; --hover: rgba(11,11,11,0.04);
+  --critical: #d03b3b; --warning: #fab219; --good: #0ca30c; --serious: #ec835a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --hover: rgba(255,255,255,0.05);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.viz-root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--page);
+  color: var(--text-primary); min-height: 100vh; padding: 20px 24px 32px; font-size: 14px; }
+header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+.live { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+.dot.stale { background: var(--muted); }
+.tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile, .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; }
+.tile { padding: 12px 14px; }
+.tile .k { color: var(--text-secondary); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.tile .v { font-size: 28px; font-weight: 600; margin-top: 4px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; }
+.card { padding: 14px 16px; min-width: 0; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 4px 6px;
+  border-bottom: 1px solid var(--grid); }
+td { padding: 6px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+td.why { white-space: normal; color: var(--text-secondary); font-size: 13px; }
+tr.sel td { background: var(--hover); }
+tbody tr.click { cursor: pointer; }
+tbody tr.click:hover td { background: var(--hover); }
+.num { text-align: right; }
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600;
+  padding: 1px 7px; border-radius: 999px; }
+.badge.urgent { background: var(--critical); color: #fff; }
+.badge.warning { background: var(--warning); color: #0b0b0b; }
+.badge.cause { background: var(--hover); color: var(--text-secondary); border: 1px solid var(--border); font-weight: 500; }
+.bar { display: inline-block; height: 8px; border-radius: 0 4px 4px 0; background: var(--series-1);
+  vertical-align: middle; margin-right: 6px; min-width: 1px; }
+.empty { color: var(--muted); padding: 16px 0; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 5px; }
+#chart { position: relative; }
+#chart svg { display: block; width: 100%; height: 220px; overflow: visible; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  display: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.reasons { margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; }
+.reasons li { padding: 3px 0; color: var(--text-secondary); }
+.reasons b { color: var(--text-primary); font-weight: 500; }
+.scroll { max-height: 330px; overflow-y: auto; }
+@media (max-width: 900px) { .tiles { grid-template-columns: repeat(2, 1fr); } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <h1>GPU fleet health</h1>
+    <span class="sub live"><span class="dot stale" id="dot"></span><span id="clock">waiting for telemetry</span></span>
+    <span class="sub" id="perf"></span>
+  </header>
+
+  <section class="tiles" aria-label="Fleet summary">
+    <div class="tile"><div class="k">GPUs tracked</div><div class="v" id="t-gpus">0</div></div>
+    <div class="tile"><div class="k"><span class="badge urgent">!</span>Urgent (fail within 24h)</div><div class="v" id="t-urgent">0</div></div>
+    <div class="tile"><div class="k"><span class="badge warning">▲</span>Warning (fail within 72h)</div><div class="v" id="t-warning">0</div></div>
+    <div class="tile"><div class="k">Stragglers now</div><div class="v" id="t-strag">0</div></div>
+    <div class="tile"><div class="k">Alerts raised</div><div class="v" id="t-alerts">0</div></div>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>Highest-risk GPUs</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>GPU</th><th>Chance of failing in 24h</th><th class="num">72h</th><th>Level</th></tr></thead>
+        <tbody id="risk"></tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <h2 id="g-title">Risk history</h2>
+      <div class="legend"><span><i style="background:var(--series-1)"></i>within 24h</span><span><i style="background:var(--series-2)"></i>within 72h</span><span><i style="border-top:1px dashed var(--muted);height:0"></i>alert thresholds</span></div>
+      <div id="chart"><svg id="svg" role="img" aria-label="Failure probability over the last 72 hours"></svg><div class="tip" id="tip"></div></div>
+      <ul class="reasons" id="reasons"></ul>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>Recent alerts</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Time</th><th>Level</th><th>GPU</th><th>Why</th></tr></thead>
+        <tbody id="alerts"></tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <h2>Stragglers (slowing their job right now)</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>GPU</th><th class="num">Slowdown</th><th>Likely cause</th></tr></thead>
+        <tbody id="strag"></tbody>
+      </table></div>
+    </div>
+  </section>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pct = p => p >= 0.995 ? "99%+" : p < 0.005 ? "<1%" : Math.round(p * 100) + "%";
+const gpuName = r => `${esc(r.node_id)} · gpu${r.gpu_index}`;
+const shortTime = t => t ? t.replace("T", " ").slice(5, 16) : "";
+const causeText = {thermal: "overheating, clocks throttled", clock: "running at lower clocks", off_gpu: "not the GPU (input, network or host)"};
+const badge = l => l === "urgent" ? '<span class="badge urgent">! urgent</span>'
+  : l === "warning" ? '<span class="badge warning">▲ warning</span>' : "";
+let selected = null, thresholds = {p24: 0.5, p72: 0.5}, lastBeat = 0;
+
+function why(reasons) {
+  return (reasons || []).map(r => esc(r.label)).join("; ");
+}
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch("v1/summary")).json(); } catch (e) { $("dot").className = "dot stale"; return; }
+  lastBeat = Date.now();
+  const c = s.counters;
+  thresholds = s.thresholds;
+  $("dot").className = c.current_hour ? "dot" : "dot stale";
+  $("clock").textContent = c.current_hour ? `fleet time ${c.current_hour.slice(0, 16)}` : "waiting for telemetry";
+  $("perf").textContent = c.rows_ingested ? `${c.rows_ingested.toLocaleString()} rows ingested · last batch ${c.last_ingest_ms} ms` : "";
+  $("t-gpus").textContent = c.gpus_tracked;
+  $("t-urgent").textContent = s.levels.urgent;
+  $("t-warning").textContent = s.levels.warning;
+  $("t-strag").textContent = s.stragglers.length;
+  $("t-alerts").textContent = c.alerts;
+
+  if (!selected && s.risk.length) selected = s.risk[0].gpu_uuid;
+  const maxP = Math.max(0.05, ...s.risk.map(r => r.p24));
+  $("risk").innerHTML = s.risk.length ? s.risk.map(r => `
+    <tr class="click ${r.gpu_uuid === selected ? "sel" : ""}" data-uuid="${esc(r.gpu_uuid)}">
+      <td>${gpuName(r)}</td>
+      <td><span class="bar" style="width:${Math.round(110 * r.p24 / maxP)}px"></span>${pct(r.p24)}</td>
+      <td class="num">${pct(r.p72)}</td><td>${badge(r.level)}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="empty">No scores yet: the first hour of telemetry is still arriving.</td></tr>';
+  document.querySelectorAll("#risk tr.click").forEach(tr => tr.onclick = () => { selected = tr.dataset.uuid; refresh(); });
+
+  $("alerts").innerHTML = s.alerts.length ? s.alerts.map(a => `
+    <tr class="click" data-uuid="${esc(a.gpu_uuid)}"><td>${shortTime(a.time)}</td><td>${badge(a.level)}</td>
+      <td>${gpuName(a)}</td><td class="why">${why(a.reasons)}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="empty">No alerts yet.</td></tr>';
+  document.querySelectorAll("#alerts tr.click").forEach(tr => tr.onclick = () => { selected = tr.dataset.uuid; refresh(); });
+
+  $("strag").innerHTML = s.stragglers.length ? s.stragglers.map(r => `
+    <tr><td>${gpuName(r)}</td><td class="num">${((r.slowdown - 1) * 100).toFixed(0)}% slower</td>
+      <td><span class="badge cause">${esc(causeText[r.cause] || r.cause)}</span></td></tr>`).join("")
+    : '<tr><td colspan="3" class="empty">No stragglers at the latest scrape.</td></tr>';
+
+  if (selected) drawGpu(selected);
+}
+
+async function drawGpu(uuid) {
+  let g;
+  try { const r = await fetch("v1/gpu/" + encodeURIComponent(uuid)); if (!r.ok) return; g = await r.json(); } catch (e) { return; }
+  const cur = g.current || {};
+  $("g-title").textContent = `Risk history: ${cur.node_id || ""} gpu${cur.gpu_index ?? ""}`;
+  const last = g.alerts[g.alerts.length - 1];
+  $("reasons").innerHTML = last && last.reasons.length
+    ? `<li>Last alert ${shortTime(last.time)}, driven by:</li>` + last.reasons.map(r =>
+        `<li><b>${esc(r.label)}</b> (value ${r.value ?? "n/a"})</li>`).join("")
+    : "<li>No alerts for this GPU.</li>";
+  chart(g.history);
+}
+
+function chart(hist) {
+  const svg = $("svg"), W = svg.clientWidth || 500, H = 220, m = {l: 40, r: 12, t: 10, b: 24};
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  if (!hist.length) { svg.innerHTML = ""; return; }
+  const ts = hist.map(h => Date.parse(h.time + "Z"));
+  const t0 = Math.min(...ts), t1 = Math.max(t0 + 3600e3, ...ts);
+  const raw = Math.max(0.1, thresholds.p24 * 1.15, thresholds.p72 * 1.15, ...hist.map(h => 1.05 * Math.max(h.p24, h.p72)));
+  const ymax = Math.min(1, Math.ceil(raw * 5) / 5);
+  const x = t => m.l + iw * (t - t0) / (t1 - t0), y = v => m.t + ih * (1 - v / ymax);
+  const ticks = [0, ymax / 2, ymax].map(v => Math.round(v * 100) / 100);
+  let out = ticks.map(v => `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>
+    <text x="${m.l - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${Math.round(v * 100)}%</text>`).join("");
+  out += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(0)}" y2="${y(0)}" stroke="var(--axis)"/>`;
+  for (const [k, lab] of [["p24", "24h threshold"], ["p72", "72h threshold"]]) {
+    const v = thresholds[k];
+    if (v <= ymax) out += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--muted)" stroke-dasharray="4 3"/>
+      <text x="${m.l + 4}" y="${y(v) - 4}" text-anchor="start" font-size="11" fill="var(--muted)">${lab}</text>`;
+  }
+  const hours = (t1 - t0) / 3600e3, step = hours > 48 ? 24 : hours > 12 ? 6 : 2;
+  for (let t = Math.ceil(t0 / (step * 3600e3)) * step * 3600e3; t <= t1; t += step * 3600e3) {
+    const d = new Date(t);
+    out += `<text x="${x(t)}" y="${H - 6}" text-anchor="middle" font-size="11" fill="var(--muted)">${String(d.getUTCDate()).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}:00</text>`;
+  }
+  for (const [k, col] of [["p72", "var(--series-2)"], ["p24", "var(--series-1)"]]) {
+    const pts = hist.map((h, i) => `${x(ts[i]).toFixed(1)},${y(h[k]).toFixed(1)}`).join(" ");
+    out += `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
+  out += `<line id="xh" y1="${m.t}" y2="${m.t + ih}" stroke="var(--axis)" visibility="hidden"/>
+    <circle id="d24" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2" visibility="hidden"/>
+    <circle id="d72" r="4" fill="var(--series-2)" stroke="var(--surface-1)" stroke-width="2" visibility="hidden"/>
+    <rect x="${m.l}" y="${m.t}" width="${iw}" height="${ih}" fill="transparent" id="hit"/>`;
+  svg.innerHTML = out;
+  const tip = $("tip"), hit = $("hit");
+  hit.onmousemove = ev => {
+    const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * W / r.width;
+    let i = 0, best = Infinity;
+    ts.forEach((t, j) => { const d = Math.abs(x(t) - px); if (d < best) { best = d; i = j; } });
+    const h = hist[i], cx = x(ts[i]);
+    for (const [id, k] of [["xh"], ["d24", "p24"], ["d72", "p72"]]) {
+      const el = $(id); el.setAttribute("visibility", "visible");
+      if (k) { el.setAttribute("cx", cx); el.setAttribute("cy", y(h[k])); } else { el.setAttribute("x1", cx); el.setAttribute("x2", cx); }
+    }
+    tip.style.display = "block";
+    tip.innerHTML = `${shortTime(h.time)}<br>within 24h: <b>${pct(h.p24)}</b><br>within 72h: <b>${pct(h.p72)}</b>${h.level ? "<br>" + badge(h.level) : ""}`;
+    const left = cx * r.width / W + 12;
+    tip.style.left = Math.min(left, r.width - tip.offsetWidth - 4) + "px";
+    tip.style.top = "8px";
+  };
+  hit.onmouseleave = () => { tip.style.display = "none"; ["xh", "d24", "d72"].forEach(id => $(id).setAttribute("visibility", "hidden")); };
+}
+
+refresh();
+setInterval(refresh, 2000);
+setInterval(() => { if (Date.now() - lastBeat > 6000) $("dot").className = "dot stale"; }, 2000);
+</script>
+</body>
+</html>

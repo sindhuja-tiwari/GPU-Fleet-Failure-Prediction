@@ -25,3 +25,23 @@ jobs:
           gpufleet summarize data/smoke
           gpufleet plots data/smoke --out data/smoke/figures
           gpufleet features data/smoke
+          gpufleet stragglers data/smoke
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build
+      - name: Start the API with the shipped bundle
+        run: |
+          docker compose up -d api
+          for i in $(seq 60); do curl -sf localhost:8000/healthz && break; sleep 2; done
+      - name: Replay a short fleet and check the scores
+        run: |
+          docker compose run --rm replayer sh -c \
+            "gpufleet simulate --out /data/ci --nodes 2 --days 1.2 --seed 3 && gpufleet replay /data/ci --url http://api:8000"
+          curl -sf localhost:8000/v1/summary | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d['counters']); assert d['counters']['gpus_tracked'] >= 16"
+          curl -sf localhost:8000/metrics | grep -c gpufleet_failure_probability
+      - if: always()
+        run: docker compose logs --tail 50 && docker compose down -v
