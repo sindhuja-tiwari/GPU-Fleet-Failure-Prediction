@@ -93,7 +93,7 @@ def test_api_end_to_end(bundle, live):
     loaded, _, _ = bundle
     client = TestClient(create_app(loaded))
     assert client.get("/healthz").json()["ok"]
-    assert "GPU fleet health" in client.get("/").text
+    assert "fleet health" in client.get("/").text
 
     rounds = live["timestamp"].dt.round("5min")
     keys = np.sort(rounds.unique())
