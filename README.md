@@ -13,22 +13,39 @@ the likely cause. See the [8-week plan](docs/plan.md).
 | --- | --- | --- |
 | 1 | Package, telemetry schema, fleet simulator | Done ([notes](docs/weeks/week-01.md)) |
 | 2 | Data realism, real-data loader, exploration | Done ([notes](docs/weeks/week-02.md)) |
-| 3 | Labels and features | Next |
-| 4 | Baseline models and evaluation | |
-| 5 | Straggler detection | |
+| 3 | Labels and features | Done ([notes](docs/weeks/week-03.md)) |
+| 4 | Baseline models and evaluation | Done ([notes](docs/weeks/week-04.md)) |
+| 5 | Straggler detection | Next |
 | 6 | Sequence models and calibration | |
 | 7 | Serving and dashboard | |
 | 8 | Explanations, model card, write-up | |
+
+## Results so far
+
+Test period of three simulated 512-GPU fleets, 24-hour horizon, thresholds picked on
+validation for at most 5 false alerts per 1,000 GPU-days. Full table and caveats in the
+[week 4 notes](docs/weeks/week-04.md).
+
+| Model | PR-AUC | Predictable failures caught | False alerts / 1k GPU-days | Median warning |
+| --- | --- | --- | --- | --- |
+| Rules (fixed operator thresholds) | 0.24 | 92% | 54.7 | 11 h |
+| Logistic regression | 0.46 | 83% | 2.5 | 9 h |
+| LightGBM | 0.52 | 92% | 2.7 | 10 h |
+
+LightGBM catches as many failures as the rules with about 20 times fewer false pages.
+Warning time is still short of the 12-hour target; that is the main job for week 6.
 
 ## Quick start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,models]"
 
 gpufleet simulate --out data/sim          # 256 GPUs, 30 days, ~6 seconds
 gpufleet summarize data/sim               # validate, print counts and data quality
 gpufleet plots data/sim                   # exploration figures into docs/figures
+gpufleet features data/sim                # hourly labelled feature table
+gpufleet baselines data/sim/features.parquet --out reports/my-run
 pytest -q
 ```
 
@@ -81,8 +98,15 @@ src/gpufleet/
   clean.py       clock alignment, counter resets, gaps, data-quality report
   ingest.py      DCGM exporter / Prometheus loader
   explore.py     exploration signals and figures
+  features.py    hourly feature table (no look-ahead)
+  labels.py      24h / 72h labels, censoring, time split with embargo
+  models.py      rules baseline, logistic regression, LightGBM
+  evaluate.py    alert-level metrics: recall, false alerts, lead time
+  experiment.py  train / validate / test protocol
   cli.py         command line
 notebooks/       exploration notebook
+scripts/         benchmark.sh reproduces the results table
+reports/         saved benchmark results
 tests/           pytest suite
 docs/            plan, schema, weekly notes
 ```

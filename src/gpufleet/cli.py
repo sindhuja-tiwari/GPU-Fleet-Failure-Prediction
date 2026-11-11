@@ -1,4 +1,8 @@
-"""Command line entry point: ``gpufleet simulate``, ``summarize``, ``ingest`` and ``plots``."""
+"""Command line entry point.
+
+``simulate`` and ``ingest`` produce telemetry, ``summarize`` checks it, ``plots`` explores it,
+``features`` builds the labelled hourly table, and ``baselines`` trains and scores models.
+"""
 
 from __future__ import annotations
 
@@ -102,6 +106,46 @@ def _ingest(args: argparse.Namespace) -> None:
     _print_quality(tel, args.step)
 
 
+def _step_of(d: Path, default: str = "5min") -> str:
+    if (d / "config.json").exists():
+        return f"{json.loads((d / 'config.json').read_text())['step_minutes']}min"
+    return default
+
+
+def _features(args: argparse.Namespace) -> None:
+    from .features import build_features, feature_columns
+    from .labels import add_labels
+
+    d = Path(args.data)
+    t0 = time.perf_counter()
+    tel = pd.read_parquet(d / "telemetry.parquet")
+    step = args.step or _step_of(d)
+    feats = build_features(tel, step)
+    if (d / "failures.parquet").exists():
+        end = tel["timestamp"].max().round(step)
+        feats = add_labels(feats, pd.read_parquet(d / "failures.parquet"), end)
+    out = Path(args.out) if args.out else d / "features.parquet"
+    feats.to_parquet(out, index=False)
+    msg = (f"wrote {len(feats):,} rows x {len(feature_columns(feats))} features to {out} "
+           f"in {time.perf_counter() - t0:.1f}s")
+    if "label_24h" in feats:
+        msg += (f"\npositives: {int(feats['label_24h'].sum()):,} (24h), "
+                f"{int(feats['label_72h'].sum()):,} (72h); "
+                f"censored rows: {int(feats['label_24h'].isna().sum()):,}")
+    print(msg)
+
+
+def _baselines(args: argparse.Namespace) -> None:
+    from .experiment import run_baselines
+
+    feats = pd.read_parquet(args.features)
+    res = run_baselines(feats, max_false_per_1k=args.budget, val_days=args.val_days,
+                        test_days=args.test_days, seed=args.seed)
+    out = res.write(args.out)
+    print(res.markdown())
+    print(f"wrote {out}")
+
+
 def _plots(args: argparse.Namespace) -> None:
     from .explore import save_all_figures
 
@@ -144,6 +188,22 @@ def main(argv: list[str] | None = None) -> None:
     pl.add_argument("data", help="directory written by `gpufleet simulate`")
     pl.add_argument("--out", default="docs/figures", help="where to write PNGs")
     pl.set_defaults(func=_plots)
+
+    f = sub.add_parser("features", help="build the labelled hourly feature table")
+    f.add_argument("data", help="directory with telemetry.parquet (and failures.parquet)")
+    f.add_argument("--out", help="output file (default: <data>/features.parquet)")
+    f.add_argument("--step", help="scrape interval (default: from config.json, else 5min)")
+    f.set_defaults(func=_features)
+
+    b = sub.add_parser("baselines", help="train and evaluate rules, logistic and LightGBM")
+    b.add_argument("features", help="labelled feature table from `gpufleet features`")
+    b.add_argument("--out", default="reports/baselines", help="output directory")
+    b.add_argument("--budget", type=float, default=5.0,
+                   help="false alerts per 1,000 GPU-days allowed when picking thresholds")
+    b.add_argument("--val-days", type=float, default=10)
+    b.add_argument("--test-days", type=float, default=14)
+    b.add_argument("--seed", type=int, default=0)
+    b.set_defaults(func=_baselines)
 
     args = parser.parse_args(argv)
     args.func(args)
