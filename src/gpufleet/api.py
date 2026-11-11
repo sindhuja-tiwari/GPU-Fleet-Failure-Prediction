@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request  # needs the "serve" extra
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from .bundle import Bundle
 from .ingest import _cast, parse_exporter_text, to_telemetry
@@ -256,5 +256,15 @@ def create_app(bundle: Bundle | str | Path, step: str = "5min", rack_map: dict |
     @app.get("/", response_class=HTMLResponse)
     def dashboard():
         return resources.files("gpufleet").joinpath("static/dashboard.html").read_text()
+
+    fonts = {"inter.woff2", "newsreader.woff2", "newsreader-italic.woff2"}
+
+    @app.get("/static/fonts/{name}")
+    def font(name: str):
+        if name not in fonts:
+            raise HTTPException(404, "unknown font")
+        data = resources.files("gpufleet").joinpath(f"static/fonts/{name}").read_bytes()
+        return Response(data, media_type="font/woff2",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
     return app

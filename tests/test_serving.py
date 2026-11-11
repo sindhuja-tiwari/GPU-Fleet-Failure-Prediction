@@ -123,3 +123,16 @@ def test_api_end_to_end(bundle, live):
     assert client.post("/v1/telemetry", json={"rows": [{"gpu_uuid": "x"}]}).status_code == 422
     assert client.post("/v1/telemetry", json={"rows": []}).status_code == 422
     assert client.post("/v1/scrape", content="# nothing\n").status_code == 422
+
+
+def test_dashboard_fonts_are_served(bundle):
+    from fastapi.testclient import TestClient
+
+    from gpufleet.api import create_app
+
+    client = TestClient(create_app(bundle[0]))
+    r = client.get("/static/fonts/inter.woff2")
+    assert r.status_code == 200 and r.headers["content-type"] == "font/woff2"
+    assert r.content[:4] == b"wOF2"
+    assert client.get("/static/fonts/../api.py").status_code == 404
+    assert client.get("/static/fonts/other.woff2").status_code == 404

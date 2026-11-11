@@ -80,6 +80,13 @@ shows:
 - recent alerts with their reasons;
 - the stragglers table, with the cause in plain words.
 
+It follows an editorial broadsheet style: bone-white paper, black type, one highlighter green,
+a dark mid-page break for alerts and a full-bleed green band at the end. The style guide's
+faces (TWK Lausanne, PP Mondwest, Editorial New) are licensed, so the page uses them when
+they are installed and otherwise falls back to Inter and Newsreader, which ship with the
+package under the SIL Open Font License (`src/gpufleet/static/fonts`). The page needs no
+internet access.
+
 ## Running it
 
 With Docker:
