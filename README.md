@@ -1,5 +1,7 @@
 # GPU Fleet Failure Prediction
 
+![tests](https://github.com/sindhuja-tiwari/GPU-Fleet-Failure-Prediction/actions/workflows/tests.yml/badge.svg)
+
 Predict failing GPUs and training-job stragglers from fleet telemetry (temperatures, power,
 clocks, ECC and NVLink errors, Xid codes, step times).
 
