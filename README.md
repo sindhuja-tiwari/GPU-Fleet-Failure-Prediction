@@ -195,3 +195,6 @@ reports/         saved results (baselines, week 6 policies, stragglers, ablation
 tests/           pytest suite
 docs/            plan, schema, weekly notes, model card, demo video
 ```
+## License
+
+Code is released under the [MIT License](LICENSE). 
